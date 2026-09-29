@@ -1,0 +1,22 @@
+[Unit]
+Description=MOSTIK web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mostik
+WorkingDirectory=/opt/mostik
+ExecStart=/usr/bin/node server.mjs
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+Environment=NODE_ENV=production
+Environment=MOSTIK_LOCAL=1
+Environment=MOSTIK_KEEP_SECURE=1
+Environment=MOSTIK_REGISTRATION=closed
+Environment=HOST=127.0.0.1
+Environment=PORT=8787
+Environment=PUBLIC_URL=https://__DOMAIN__
+
+[Install]
+WantedBy=multi-user.target

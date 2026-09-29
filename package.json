@@ -1,0 +1,16 @@
+{
+  "name": "mostik-local",
+  "version": "5.3.24-local",
+  "private": true,
+  "description": "MOSTIK local (embedded DB, no Docker)",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.8"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

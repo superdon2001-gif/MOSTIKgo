@@ -1,0 +1,459 @@
+--- api.mjs	2026-09-13 11:13:55.000000000 +0000
++++ /tmp/patched/api.mjs	2026-09-13 11:28:26.000000000 +0000
+@@ -672,7 +672,7 @@
+ 
+   if(p==='animals'){
+     if(req.method==='GET'){
+-      const r=await db.sql`SELECT a.*,COALESCE((SELECT json_agg(json_build_object('id',aa2.id,'title',aa2.title,'category',aa2.category) ORDER BY aa2.title) FROM animal_attention aa2 WHERE aa2.animal_id=a.id),'[]') attention,COALESCE((SELECT json_agg(json_build_object('id',df.id,'category',df.category,'title',df.title,'status',df.status,'note',df.note,'created_at',df.created_at) ORDER BY df.category,df.title) FROM animal_development_features df WHERE df.animal_id=a.id),'[]') development_features,COALESCE((SELECT json_agg(json_build_object('id',hf.id,'feature_type',hf.feature_type,'title',hf.title,'severity',hf.severity,'status',hf.status,'note',hf.note,'created_at',hf.created_at) ORDER BY CASE hf.severity WHEN 'critical' THEN 1 WHEN 'important' THEN 2 ELSE 3 END,hf.title) FROM animal_health_features hf WHERE hf.animal_id=a.id),'[]') health_features FROM animals a LEFT JOIN animal_access aa ON aa.animal_id=a.id AND aa.user_id=${me.id} WHERE ${me.role==='admin'} OR a.owner_id=${me.id} OR aa.user_id IS NOT NULL ORDER BY a.name`;
++      const r=await db.sql`SELECT DISTINCT ON (a.id) a.*,COALESCE((SELECT json_agg(json_build_object('id',aa2.id,'title',aa2.title,'category',aa2.category) ORDER BY aa2.title) FROM animal_attention aa2 WHERE aa2.animal_id=a.id),'[]') attention,COALESCE((SELECT json_agg(json_build_object('id',df.id,'category',df.category,'title',df.title,'status',df.status,'note',df.note,'created_at',df.created_at) ORDER BY df.category,df.title) FROM animal_development_features df WHERE df.animal_id=a.id),'[]') development_features,COALESCE((SELECT json_agg(json_build_object('id',hf.id,'feature_type',hf.feature_type,'title',hf.title,'severity',hf.severity,'status',hf.status,'note',hf.note,'created_at',hf.created_at) ORDER BY CASE hf.severity WHEN 'critical' THEN 1 WHEN 'important' THEN 2 ELSE 3 END,hf.title) FROM animal_health_features hf WHERE hf.animal_id=a.id),'[]') health_features FROM animals a LEFT JOIN animal_access aa ON aa.animal_id=a.id AND aa.user_id=${me.id} WHERE ${me.role==='admin'} OR a.owner_id=${me.id} OR aa.user_id IS NOT NULL ORDER BY a.id,a.name`;
+       return json({animals:r});
+     }
+     if(req.method==='POST' && ['admin','owner','keeper'].includes(me.effective_role)){
+--- app.js	2026-09-13 11:13:55.000000000 +0000
++++ /tmp/patched/app.js	2026-09-13 11:29:06.000000000 +0000
+@@ -138,6 +138,46 @@
+ if('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
+ /* MOSTIK 5.0: unified workspace */
+ let state={homeRenderSeq:0,scopeSort:'date_desc',user:null,animals:[],animal:null,animalCatalog:[],skills:[],selected:[],timer:null,started:null,seconds:0,authMode:'login',adminUsers:[],grants:[],roles:[],activeRole:null,homework:[],vet:[],observations:[],food:[],today:null,repeat:null,repeatTraining:null,defaults:null,reminders:[],dueReminders:[],insight:null,allOverview:[]};
++function normalizeAnimals(rows){
++  const input=Array.isArray(rows)?rows:[];
++  const byId=new Map(), byIdentity=new Map();
++  for(const raw of input){
++    if(!raw || raw.id==null) continue;
++    const a=raw;
++    const id=String(a.id);
++    if(byId.has(id)) continue;
++    const norm=v=>String(v??'').trim().toLocaleLowerCase('ru-RU');
++    // Only collapse records that look like the same database entity.
++    // The ID remains authoritative; different animals with the same name are kept.
++    const identity=[
++      norm(a.owner_id), norm(a.name), norm(a.species), norm(a.breed),
++      norm(a.subspecies), norm(a.birth_date), norm(a.microchip)
++    ].join('|');
++    if(identity && byIdentity.has(identity)){
++      const existing=byIdentity.get(identity);
++      // Prefer a record with richer data, but never expose both cards.
++      const score=x=>['description','avatar_icon','status','attention','health_features','development_features'].reduce((n,k)=>n+(x?.[k]!=null&&x[k]!==''?1:0),0);
++      if(score(a)>score(existing)){
++        byId.delete(String(existing.id));
++        byIdentity.set(identity,a);
++        byId.set(id,a);
++      }
++      continue;
++    }
++    byId.set(id,a);
++    if(identity) byIdentity.set(identity,a);
++  }
++  return [...byId.values()];
++}
++function setAnimals(rows){
++  state.animals=normalizeAnimals(rows);
++  if(state.animal){
++    const current=state.animals.find(a=>String(a.id)===String(state.animal.id));
++    state.animal=current||state.animal;
++  }
++  return state.animals;
++}
++
+ const apiCache=new Map(),apiPending=new Map();
+ 
+ function toast(msg, kind='ok'){
+@@ -669,7 +709,7 @@
+   state.user = d.user;
+ 
+   try {
+-    state.animals = (await api('animals')).animals || [];
++    setAnimals((await api('animals')).animals || []);
+ 
+     const pref = getSettings();
+ 
+@@ -821,37 +861,51 @@
+     });
+   }catch(e){ console.warn('nav badges', e); }
+ }
++function showViewCrash(c,v,error){
++  console.error('MOSTIK view crashed:',v,error);
++  if(!c)return;
++  c.setAttribute('aria-busy','false');
++  c.innerHTML=`<div class="card empty-state view-error-boundary" role="alert">
++    <div class="empty-icon" aria-hidden="true">⚠</div>
++    <h2>Не удалось открыть раздел</h2>
++    <p class="muted">Раздел «${esc(String(v||'').replace(/</g,'&lt;'))}» столкнулся с ошибкой. Данные не потеряны. Попробуйте открыть раздел ещё раз.</p>
++    <div class="empty-actions">
++      <button type="button" class="primary" id="retryView">Повторить</button>
++      <button type="button" class="secondary" id="goHomeAfterCrash">На главную</button>
++    </div>
++  </div>`;
++  c.querySelector('#retryView')?.addEventListener('click',()=>view(v));
++  c.querySelector('#goHomeAfterCrash')?.addEventListener('click',()=>view(defaultViewForRole()));
++}
+ function view(v){
+  const active=v==='home'?'home':v;
+- // Always clear first so only one nav item is highlighted
+  document.querySelectorAll('aside [data-view]').forEach(b=>{
+    b.classList.remove('active');
+    if(b.dataset.view===active) b.classList.add('active');
+  });
+  const c=document.querySelector('#content');
+- if(v==='home')home(c);
+- if(v==='animals')animals(c);
+- if(v==='journal')journal(c);
+- if(v==='skills')skills(c);
+- if(v==='training')training(c);
+- if(v==='training-templates')trainingTemplates(c);
+- if(v==='smart-templates')smartTemplates(c);
+- if(v==='observations')observations(c);
+- if(v==='analytics')analytics(c);
+- if(v==='vet')vet(c);
+- if(v==='enrichment')enrichment(c);
+- if(v==='food')food(c);
+- if(v==='diets'){state.foodTab='plan';food(c);}
+- if(v==='admin')admin(c);
+- if(v==='admin-errors')adminErrors(c);
+- if(v==='insight')insight(c);
+- if(v==='settings')settings(c);
+- if(v==='development')developmentFeatures(c);
+- if(v==='calendar')calendar(c);
+- if(v==='reminders')reminders(c);
+- if(v==='care-overview')careOverview(c);
+- setTimeout(()=>enhanceSmartFields(c),80);
++ if(!c)return;
++ c.setAttribute('aria-busy','true');
++ const handlers={
++   home,animals,journal,skills,training,trainingTemplates,smartTemplates,observations,
++   analytics,vet,enrichment,food,admin,adminErrors,insight,settings,developmentFeatures,
++   calendar,reminders,careOverview
++ };
++ try{
++   let result;
++   if(v==='diets'){state.foodTab='plan';result=food(c);}
++   else if(handlers[v]) result=handlers[v](c);
++   else result=home(c);
++   c.setAttribute('aria-busy','false');
++   if(result && typeof result.then==='function'){
++     result.catch(e=>showViewCrash(c,v,e));
++   }
++ }catch(e){
++   showViewCrash(c,v,e);
++ }
++ setTimeout(()=>{try{enhanceSmartFields(c)}catch(e){console.warn('smart fields',e)}},80);
+ }
++
+ function localDayBounds(){const d=new Date();d.setHours(0,0,0,0);const e=new Date(d);e.setDate(e.getDate()+1);return {from:d.toISOString(),to:e.toISOString(),label:d.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'})}}
+ function animalSpeciesIcon(a){
+   let iconId = a?.avatar_icon;
+@@ -1169,7 +1223,7 @@
+ 
+ function photoMarkup(a, cls='animal-avatar'){return a?.photo_data?`<img class="${cls} animal-photo" src="${esc(a.photo_data)}" alt="Фото ${esc(a.name||'животного')}">`:`<span class="${cls}">${animalSpeciesIcon(a)}</span>`}
+ async function fileToCompressedDataUrl(file){return await new Promise((resolve,reject)=>{const r=new FileReader();r.onerror=()=>reject(new Error('Не удалось прочитать фото'));r.onload=()=>{const img=new Image();img.onload=()=>{const max=1200,scale=Math.min(1,max/Math.max(img.width,img.height)),w=Math.max(1,Math.round(img.width*scale)),h=Math.max(1,Math.round(img.height*scale));const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d',{alpha:true});ctx.drawImage(img,0,0,w,h);resolve(canvas.toDataURL('image/webp',0.82))};img.onerror=()=>reject(new Error('Не удалось открыть изображение'));img.src=r.result};r.readAsDataURL(file)})}
+-function photoEditor(c,a,after){const can=['admin','owner'].includes(state.user.effective_role); if(!can){alert('Фото профиля может менять администратор или владелец.');return;} const old=a?.photo_data||''; const wrap=document.createElement('div'); wrap.className='modal-backdrop'; wrap.innerHTML=`<div class="modal-card photo-modal" role="dialog" aria-modal="true"><div class="top"><div><h2>Фото профиля</h2><p class="muted">${esc(a.name)} · фото будет автоматически сжато для быстрой загрузки.</p></div><button type="button" class="secondary photo-close">×</button></div><div class="photo-preview">${old?`<img src="${esc(old)}" alt="Фото">`:`<div class="photo-placeholder">${animalSpeciesIcon(a)}</div>`}</div><label class="file-label">Выбрать фото<input id="animalPhotoFile" type="file" accept="image/*" hidden></label><div class="actions"><button type="button" class="primary photo-save" disabled>Сохранить фото</button>${old?`<button type="button" class="danger photo-delete">Удалить фото</button>`:''}</div></div>`;document.body.append(wrap);const close=()=>wrap.remove();wrap.querySelector('.photo-close').onclick=close;wrap.addEventListener('click',e=>{if(e.target===wrap)close()});let data=old;const file=wrap.querySelector('#animalPhotoFile');const save=wrap.querySelector('.photo-save');file.onchange=async()=>{const f=file.files?.[0];if(!f)return;try{data=await fileToCompressedDataUrl(f);wrap.querySelector('.photo-preview').innerHTML=`<img src="${esc(data)}" alt="Предпросмотр">`;save.disabled=false;}catch(e){alert(e.message)}};save.onclick=async()=>{try{save.disabled=true;await api(`animals/${a.id}/photo`,{method:'PUT',body:JSON.stringify({photo_data:data})});state.animals=(await api('animals')).animals;a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){save.disabled=false;alert(e.message)}};wrap.querySelector('.photo-delete')?.addEventListener('click',async()=>{if(!confirm('Удалить фото профиля?'))return;try{await api(`animals/${a.id}/photo`,{method:'DELETE'});state.animals=(await api('animals')).animals;a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){alert(e.message)}});wrap.querySelector('.file-label').focus?.()}
++function photoEditor(c,a,after){const can=['admin','owner'].includes(state.user.effective_role); if(!can){alert('Фото профиля может менять администратор или владелец.');return;} const old=a?.photo_data||''; const wrap=document.createElement('div'); wrap.className='modal-backdrop'; wrap.innerHTML=`<div class="modal-card photo-modal" role="dialog" aria-modal="true"><div class="top"><div><h2>Фото профиля</h2><p class="muted">${esc(a.name)} · фото будет автоматически сжато для быстрой загрузки.</p></div><button type="button" class="secondary photo-close">×</button></div><div class="photo-preview">${old?`<img src="${esc(old)}" alt="Фото">`:`<div class="photo-placeholder">${animalSpeciesIcon(a)}</div>`}</div><label class="file-label">Выбрать фото<input id="animalPhotoFile" type="file" accept="image/*" hidden></label><div class="actions"><button type="button" class="primary photo-save" disabled>Сохранить фото</button>${old?`<button type="button" class="danger photo-delete">Удалить фото</button>`:''}</div></div>`;document.body.append(wrap);const close=()=>wrap.remove();wrap.querySelector('.photo-close').onclick=close;wrap.addEventListener('click',e=>{if(e.target===wrap)close()});let data=old;const file=wrap.querySelector('#animalPhotoFile');const save=wrap.querySelector('.photo-save');file.onchange=async()=>{const f=file.files?.[0];if(!f)return;try{data=await fileToCompressedDataUrl(f);wrap.querySelector('.photo-preview').innerHTML=`<img src="${esc(data)}" alt="Предпросмотр">`;save.disabled=false;}catch(e){alert(e.message)}};save.onclick=async()=>{try{save.disabled=true;await api(`animals/${a.id}/photo`,{method:'PUT',body:JSON.stringify({photo_data:data})});setAnimals((await api('animals')).animals);a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){save.disabled=false;alert(e.message)}};wrap.querySelector('.photo-delete')?.addEventListener('click',async()=>{if(!confirm('Удалить фото профиля?'))return;try{await api(`animals/${a.id}/photo`,{method:'DELETE'});setAnimals((await api('animals')).animals);a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){alert(e.message)}});wrap.querySelector('.file-label').focus?.()}
+ async function loadAnimalCatalog(){
+   if(state.animalCatalog?.length) return state.animalCatalog;
+   try{ const d=await api('animal-catalog'); state.animalCatalog=Array.isArray(d.catalog)?d.catalog:[]; }
+@@ -1331,9 +1385,9 @@
+   }catch(err){try{toast(err.message||'Ошибка экспорта','warn')}catch{alert(err.message)}}
+ });
+ document.querySelectorAll('.copy-animal-id').forEach(b=>b.onclick=async e=>{e.stopPropagation();const ok=await copyText(b.dataset.id);const prev=b.textContent;b.textContent=ok?'Скопировано':'Ошибка';setTimeout(()=>b.textContent=prev,1400);});
+- document.querySelectorAll('.status-edit').forEach(b=>b.onclick=async()=>{const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;const status=prompt('Статус: normal / attention / critical',a.status||'normal');if(!['normal','attention','critical'].includes(status||''))return;try{await api(`animals/${a.id}/status`,{method:'PUT',body:JSON.stringify({status})});state.animals=(await api('animals')).animals;if(state.animal?.id===a.id)state.animal=state.animals.find(x=>x.id===a.id)||state.animal;render()}catch(e){alert(e.message)}});
+- document.querySelectorAll('.delete-animal').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить животное и все связанные записи? Это действие необратимо.'))return;try{await api(`animals/${b.dataset.id}`,{method:'DELETE'});state.animals=(await api('animals')).animals;const pref=getSettings();state.animal=state.animals.find(a=>a.name===pref.default_animal)||state.animals[0]||null;if(state.animal){state.skills=(await api(`animals/${state.animal.id}/skills`)).skills;await loadDefaults()}applySettings();render()}catch(x){alert(x.message)}});
+- document.querySelectorAll('.detach-animal').forEach(b=>b.onclick=async e=>{e.stopPropagation();const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;if(!confirm(`Убрать «${a.name}» из вашего окружения? Данные животного и доступ владельца сохранятся.`))return;try{await api(`animals/${a.id}`,{method:'DELETE'});state.animals=(await api('animals')).animals;if(state.animal?.id===a.id){state.animal=state.animals[0]||null;state.skills=[];saveActiveAnimal()}applySettings();render();try{toast(`«${a.name}» убрано из вашего окружения`,'ok')}catch{}}catch(x){alert(x.message||'Не удалось убрать животное из окружения')}});
++ document.querySelectorAll('.status-edit').forEach(b=>b.onclick=async()=>{const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;const status=prompt('Статус: normal / attention / critical',a.status||'normal');if(!['normal','attention','critical'].includes(status||''))return;try{await api(`animals/${a.id}/status`,{method:'PUT',body:JSON.stringify({status})});setAnimals((await api('animals')).animals);if(state.animal?.id===a.id)state.animal=state.animals.find(x=>x.id===a.id)||state.animal;render()}catch(e){alert(e.message)}});
++ document.querySelectorAll('.delete-animal').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить животное и все связанные записи? Это действие необратимо.'))return;try{await api(`animals/${b.dataset.id}`,{method:'DELETE'});setAnimals((await api('animals')).animals);const pref=getSettings();state.animal=state.animals.find(a=>a.name===pref.default_animal)||state.animals[0]||null;if(state.animal){state.skills=(await api(`animals/${state.animal.id}/skills`)).skills;await loadDefaults()}applySettings();render()}catch(x){alert(x.message)}});
++ document.querySelectorAll('.detach-animal').forEach(b=>b.onclick=async e=>{e.stopPropagation();const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;if(!confirm(`Убрать «${a.name}» из вашего окружения? Данные животного и доступ владельца сохранятся.`))return;try{await api(`animals/${a.id}`,{method:'DELETE'});setAnimals((await api('animals')).animals);if(state.animal?.id===a.id){state.animal=state.animals[0]||null;state.skills=[];saveActiveAnimal()}applySettings();render();try{toast(`«${a.name}» убрано из вашего окружения`,'ok')}catch{}}catch(x){alert(x.message||'Не удалось убрать животное из окружения')}});
+ const modal=document.querySelector('#animalAddModal');
+ 
+ if(modal){
+@@ -1407,7 +1461,7 @@
+   if(!aid){ alert('Введите ID животного'); return; }
+   try{
+     const res=await api('animals/access',{method:'POST',body:JSON.stringify({animal_id:aid})});
+-    state.animals=(await api('animals')).animals;
++    setAnimals((await api('animals')).animals);
+     state.animal=state.animals.find(x=>x.id===aid)||state.animals.find(x=>x.id===res?.animal?.id)||state.animal;saveActiveAnimal();
+     if(state.animal){ try{ state.skills=(await api(`animals/${state.animal.id}/skills`)).skills; }catch(_){}}
+     close();
+@@ -1497,7 +1551,7 @@
+ if(mode==='photo' && createPhotoData){
+   try{ await api(`animals/${newId}/photo`,{method:'PUT',body:JSON.stringify({photo_data:createPhotoData})}); }catch(pe){ console.warn('photo upload failed',pe); }
+ }
+-state.animals=(await api('animals')).animals;
++setAnimals((await api('animals')).animals);
+ state.animal=state.animals.find(x=>x.id===newId)||state.animals.find(x=>x.name===payload.name)||null;
+ if(!state.animal) throw new Error('Животное создано на сервере, но не вернулось в список. Обновите страницу и проверьте доступ.');
+ state.skills=state.animal?(await api(`animals/${state.animal.id}/skills`)).skills:[];
+@@ -1542,7 +1596,7 @@
+      await api(`animals/${a.id}`,{method:'PUT',body:JSON.stringify(payload)});
+      if(photoAction==='set')await api(`animals/${a.id}/photo`,{method:'PUT',body:JSON.stringify({photo_data:photoData})});
+      if(photoAction==='delete')await api(`animals/${a.id}/photo`,{method:'DELETE'});
+-     state.animals=(await api('animals')).animals;
++     setAnimals((await api('animals')).animals);
+      if(state.animal?.id===a.id)state.animal=state.animals.find(x=>x.id===a.id)||state.animal;
+      close();if(after)after();
+    }catch(err){alert(err.message)}
+--- public/app.js	2026-09-13 10:42:45.000000000 +0000
++++ /tmp/patched/public/app.js	2026-09-13 11:29:06.000000000 +0000
+@@ -138,6 +138,46 @@
+ if('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
+ /* MOSTIK 5.0: unified workspace */
+ let state={homeRenderSeq:0,scopeSort:'date_desc',user:null,animals:[],animal:null,animalCatalog:[],skills:[],selected:[],timer:null,started:null,seconds:0,authMode:'login',adminUsers:[],grants:[],roles:[],activeRole:null,homework:[],vet:[],observations:[],food:[],today:null,repeat:null,repeatTraining:null,defaults:null,reminders:[],dueReminders:[],insight:null,allOverview:[]};
++function normalizeAnimals(rows){
++  const input=Array.isArray(rows)?rows:[];
++  const byId=new Map(), byIdentity=new Map();
++  for(const raw of input){
++    if(!raw || raw.id==null) continue;
++    const a=raw;
++    const id=String(a.id);
++    if(byId.has(id)) continue;
++    const norm=v=>String(v??'').trim().toLocaleLowerCase('ru-RU');
++    // Only collapse records that look like the same database entity.
++    // The ID remains authoritative; different animals with the same name are kept.
++    const identity=[
++      norm(a.owner_id), norm(a.name), norm(a.species), norm(a.breed),
++      norm(a.subspecies), norm(a.birth_date), norm(a.microchip)
++    ].join('|');
++    if(identity && byIdentity.has(identity)){
++      const existing=byIdentity.get(identity);
++      // Prefer a record with richer data, but never expose both cards.
++      const score=x=>['description','avatar_icon','status','attention','health_features','development_features'].reduce((n,k)=>n+(x?.[k]!=null&&x[k]!==''?1:0),0);
++      if(score(a)>score(existing)){
++        byId.delete(String(existing.id));
++        byIdentity.set(identity,a);
++        byId.set(id,a);
++      }
++      continue;
++    }
++    byId.set(id,a);
++    if(identity) byIdentity.set(identity,a);
++  }
++  return [...byId.values()];
++}
++function setAnimals(rows){
++  state.animals=normalizeAnimals(rows);
++  if(state.animal){
++    const current=state.animals.find(a=>String(a.id)===String(state.animal.id));
++    state.animal=current||state.animal;
++  }
++  return state.animals;
++}
++
+ const apiCache=new Map(),apiPending=new Map();
+ 
+ function toast(msg, kind='ok'){
+@@ -648,7 +688,7 @@
+   state.user = d.user;
+ 
+   try {
+-    state.animals = (await api('animals')).animals || [];
++    setAnimals((await api('animals')).animals || []);
+ 
+     const pref = getSettings();
+ 
+@@ -780,37 +820,51 @@
+     });
+   }catch(e){ console.warn('nav badges', e); }
+ }
++function showViewCrash(c,v,error){
++  console.error('MOSTIK view crashed:',v,error);
++  if(!c)return;
++  c.setAttribute('aria-busy','false');
++  c.innerHTML=`<div class="card empty-state view-error-boundary" role="alert">
++    <div class="empty-icon" aria-hidden="true">⚠</div>
++    <h2>Не удалось открыть раздел</h2>
++    <p class="muted">Раздел «${esc(String(v||'').replace(/</g,'&lt;'))}» столкнулся с ошибкой. Данные не потеряны. Попробуйте открыть раздел ещё раз.</p>
++    <div class="empty-actions">
++      <button type="button" class="primary" id="retryView">Повторить</button>
++      <button type="button" class="secondary" id="goHomeAfterCrash">На главную</button>
++    </div>
++  </div>`;
++  c.querySelector('#retryView')?.addEventListener('click',()=>view(v));
++  c.querySelector('#goHomeAfterCrash')?.addEventListener('click',()=>view(defaultViewForRole()));
++}
+ function view(v){
+  const active=v==='home'?'home':v;
+- // Always clear first so only one nav item is highlighted
+  document.querySelectorAll('aside [data-view]').forEach(b=>{
+    b.classList.remove('active');
+    if(b.dataset.view===active) b.classList.add('active');
+  });
+  const c=document.querySelector('#content');
+- if(v==='home')home(c);
+- if(v==='animals')animals(c);
+- if(v==='journal')journal(c);
+- if(v==='skills')skills(c);
+- if(v==='training')training(c);
+- if(v==='training-templates')trainingTemplates(c);
+- if(v==='smart-templates')smartTemplates(c);
+- if(v==='observations')observations(c);
+- if(v==='analytics')analytics(c);
+- if(v==='vet')vet(c);
+- if(v==='enrichment')enrichment(c);
+- if(v==='food')food(c);
+- if(v==='diets'){state.foodTab='plan';food(c);}
+- if(v==='admin')admin(c);
+- if(v==='admin-errors')adminErrors(c);
+- if(v==='insight')insight(c);
+- if(v==='settings')settings(c);
+- if(v==='development')developmentFeatures(c);
+- if(v==='calendar')calendar(c);
+- if(v==='reminders')reminders(c);
+- if(v==='care-overview')careOverview(c);
+- setTimeout(()=>enhanceSmartFields(c),80);
++ if(!c)return;
++ c.setAttribute('aria-busy','true');
++ const handlers={
++   home,animals,journal,skills,training,trainingTemplates,smartTemplates,observations,
++   analytics,vet,enrichment,food,admin,adminErrors,insight,settings,developmentFeatures,
++   calendar,reminders,careOverview
++ };
++ try{
++   let result;
++   if(v==='diets'){state.foodTab='plan';result=food(c);}
++   else if(handlers[v]) result=handlers[v](c);
++   else result=home(c);
++   c.setAttribute('aria-busy','false');
++   if(result && typeof result.then==='function'){
++     result.catch(e=>showViewCrash(c,v,e));
++   }
++ }catch(e){
++   showViewCrash(c,v,e);
++ }
++ setTimeout(()=>{try{enhanceSmartFields(c)}catch(e){console.warn('smart fields',e)}},80);
+ }
++
+ function localDayBounds(){const d=new Date();d.setHours(0,0,0,0);const e=new Date(d);e.setDate(e.getDate()+1);return {from:d.toISOString(),to:e.toISOString(),label:d.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'})}}
+ function animalSpeciesIcon(a){
+   let iconId = a?.avatar_icon;
+@@ -1128,7 +1182,7 @@
+ 
+ function photoMarkup(a, cls='animal-avatar'){return a?.photo_data?`<img class="${cls} animal-photo" src="${esc(a.photo_data)}" alt="Фото ${esc(a.name||'животного')}">`:`<span class="${cls}">${animalSpeciesIcon(a)}</span>`}
+ async function fileToCompressedDataUrl(file){return await new Promise((resolve,reject)=>{const r=new FileReader();r.onerror=()=>reject(new Error('Не удалось прочитать фото'));r.onload=()=>{const img=new Image();img.onload=()=>{const max=1200,scale=Math.min(1,max/Math.max(img.width,img.height)),w=Math.max(1,Math.round(img.width*scale)),h=Math.max(1,Math.round(img.height*scale));const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d',{alpha:true});ctx.drawImage(img,0,0,w,h);resolve(canvas.toDataURL('image/webp',0.82))};img.onerror=()=>reject(new Error('Не удалось открыть изображение'));img.src=r.result};r.readAsDataURL(file)})}
+-function photoEditor(c,a,after){const can=['admin','owner'].includes(state.user.effective_role); if(!can){alert('Фото профиля может менять администратор или владелец.');return;} const old=a?.photo_data||''; const wrap=document.createElement('div'); wrap.className='modal-backdrop'; wrap.innerHTML=`<div class="modal-card photo-modal" role="dialog" aria-modal="true"><div class="top"><div><h2>Фото профиля</h2><p class="muted">${esc(a.name)} · фото будет автоматически сжато для быстрой загрузки.</p></div><button type="button" class="secondary photo-close">×</button></div><div class="photo-preview">${old?`<img src="${esc(old)}" alt="Фото">`:`<div class="photo-placeholder">${animalSpeciesIcon(a)}</div>`}</div><label class="file-label">Выбрать фото<input id="animalPhotoFile" type="file" accept="image/*" hidden></label><div class="actions"><button type="button" class="primary photo-save" disabled>Сохранить фото</button>${old?`<button type="button" class="danger photo-delete">Удалить фото</button>`:''}</div></div>`;document.body.append(wrap);const close=()=>wrap.remove();wrap.querySelector('.photo-close').onclick=close;wrap.addEventListener('click',e=>{if(e.target===wrap)close()});let data=old;const file=wrap.querySelector('#animalPhotoFile');const save=wrap.querySelector('.photo-save');file.onchange=async()=>{const f=file.files?.[0];if(!f)return;try{data=await fileToCompressedDataUrl(f);wrap.querySelector('.photo-preview').innerHTML=`<img src="${esc(data)}" alt="Предпросмотр">`;save.disabled=false;}catch(e){alert(e.message)}};save.onclick=async()=>{try{save.disabled=true;await api(`animals/${a.id}/photo`,{method:'PUT',body:JSON.stringify({photo_data:data})});state.animals=(await api('animals')).animals;a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){save.disabled=false;alert(e.message)}};wrap.querySelector('.photo-delete')?.addEventListener('click',async()=>{if(!confirm('Удалить фото профиля?'))return;try{await api(`animals/${a.id}/photo`,{method:'DELETE'});state.animals=(await api('animals')).animals;a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){alert(e.message)}});wrap.querySelector('.file-label').focus?.()}
++function photoEditor(c,a,after){const can=['admin','owner'].includes(state.user.effective_role); if(!can){alert('Фото профиля может менять администратор или владелец.');return;} const old=a?.photo_data||''; const wrap=document.createElement('div'); wrap.className='modal-backdrop'; wrap.innerHTML=`<div class="modal-card photo-modal" role="dialog" aria-modal="true"><div class="top"><div><h2>Фото профиля</h2><p class="muted">${esc(a.name)} · фото будет автоматически сжато для быстрой загрузки.</p></div><button type="button" class="secondary photo-close">×</button></div><div class="photo-preview">${old?`<img src="${esc(old)}" alt="Фото">`:`<div class="photo-placeholder">${animalSpeciesIcon(a)}</div>`}</div><label class="file-label">Выбрать фото<input id="animalPhotoFile" type="file" accept="image/*" hidden></label><div class="actions"><button type="button" class="primary photo-save" disabled>Сохранить фото</button>${old?`<button type="button" class="danger photo-delete">Удалить фото</button>`:''}</div></div>`;document.body.append(wrap);const close=()=>wrap.remove();wrap.querySelector('.photo-close').onclick=close;wrap.addEventListener('click',e=>{if(e.target===wrap)close()});let data=old;const file=wrap.querySelector('#animalPhotoFile');const save=wrap.querySelector('.photo-save');file.onchange=async()=>{const f=file.files?.[0];if(!f)return;try{data=await fileToCompressedDataUrl(f);wrap.querySelector('.photo-preview').innerHTML=`<img src="${esc(data)}" alt="Предпросмотр">`;save.disabled=false;}catch(e){alert(e.message)}};save.onclick=async()=>{try{save.disabled=true;await api(`animals/${a.id}/photo`,{method:'PUT',body:JSON.stringify({photo_data:data})});setAnimals((await api('animals')).animals);a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){save.disabled=false;alert(e.message)}};wrap.querySelector('.photo-delete')?.addEventListener('click',async()=>{if(!confirm('Удалить фото профиля?'))return;try{await api(`animals/${a.id}/photo`,{method:'DELETE'});setAnimals((await api('animals')).animals);a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){alert(e.message)}});wrap.querySelector('.file-label').focus?.()}
+ async function loadAnimalCatalog(){
+   if(state.animalCatalog?.length) return state.animalCatalog;
+   try{ const d=await api('animal-catalog'); state.animalCatalog=Array.isArray(d.catalog)?d.catalog:[]; }
+@@ -1290,9 +1344,9 @@
+   }catch(err){try{toast(err.message||'Ошибка экспорта','warn')}catch{alert(err.message)}}
+ });
+ document.querySelectorAll('.copy-animal-id').forEach(b=>b.onclick=async e=>{e.stopPropagation();const ok=await copyText(b.dataset.id);const prev=b.textContent;b.textContent=ok?'Скопировано':'Ошибка';setTimeout(()=>b.textContent=prev,1400);});
+- document.querySelectorAll('.status-edit').forEach(b=>b.onclick=async()=>{const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;const status=prompt('Статус: normal / attention / critical',a.status||'normal');if(!['normal','attention','critical'].includes(status||''))return;try{await api(`animals/${a.id}/status`,{method:'PUT',body:JSON.stringify({status})});state.animals=(await api('animals')).animals;if(state.animal?.id===a.id)state.animal=state.animals.find(x=>x.id===a.id)||state.animal;render()}catch(e){alert(e.message)}});
+- document.querySelectorAll('.delete-animal').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить животное и все связанные записи? Это действие необратимо.'))return;try{await api(`animals/${b.dataset.id}`,{method:'DELETE'});state.animals=(await api('animals')).animals;const pref=getSettings();state.animal=state.animals.find(a=>a.name===pref.default_animal)||state.animals[0]||null;if(state.animal){state.skills=(await api(`animals/${state.animal.id}/skills`)).skills;await loadDefaults()}applySettings();render()}catch(x){alert(x.message)}});
+- document.querySelectorAll('.detach-animal').forEach(b=>b.onclick=async e=>{e.stopPropagation();const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;if(!confirm(`Убрать «${a.name}» из вашего окружения? Данные животного и доступ владельца сохранятся.`))return;try{await api(`animals/${a.id}`,{method:'DELETE'});state.animals=(await api('animals')).animals;if(state.animal?.id===a.id){state.animal=state.animals[0]||null;state.skills=[];saveActiveAnimal()}applySettings();render();try{toast(`«${a.name}» убрано из вашего окружения`,'ok')}catch{}}catch(x){alert(x.message||'Не удалось убрать животное из окружения')}});
++ document.querySelectorAll('.status-edit').forEach(b=>b.onclick=async()=>{const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;const status=prompt('Статус: normal / attention / critical',a.status||'normal');if(!['normal','attention','critical'].includes(status||''))return;try{await api(`animals/${a.id}/status`,{method:'PUT',body:JSON.stringify({status})});setAnimals((await api('animals')).animals);if(state.animal?.id===a.id)state.animal=state.animals.find(x=>x.id===a.id)||state.animal;render()}catch(e){alert(e.message)}});
++ document.querySelectorAll('.delete-animal').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить животное и все связанные записи? Это действие необратимо.'))return;try{await api(`animals/${b.dataset.id}`,{method:'DELETE'});setAnimals((await api('animals')).animals);const pref=getSettings();state.animal=state.animals.find(a=>a.name===pref.default_animal)||state.animals[0]||null;if(state.animal){state.skills=(await api(`animals/${state.animal.id}/skills`)).skills;await loadDefaults()}applySettings();render()}catch(x){alert(x.message)}});
++ document.querySelectorAll('.detach-animal').forEach(b=>b.onclick=async e=>{e.stopPropagation();const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;if(!confirm(`Убрать «${a.name}» из вашего окружения? Данные животного и доступ владельца сохранятся.`))return;try{await api(`animals/${a.id}`,{method:'DELETE'});setAnimals((await api('animals')).animals);if(state.animal?.id===a.id){state.animal=state.animals[0]||null;state.skills=[];saveActiveAnimal()}applySettings();render();try{toast(`«${a.name}» убрано из вашего окружения`,'ok')}catch{}}catch(x){alert(x.message||'Не удалось убрать животное из окружения')}});
+ const modal=document.querySelector('#animalAddModal');
+ 
+ if(modal){
+@@ -1366,7 +1420,7 @@
+   if(!aid){ alert('Введите ID животного'); return; }
+   try{
+     const res=await api('animals/access',{method:'POST',body:JSON.stringify({animal_id:aid})});
+-    state.animals=(await api('animals')).animals;
++    setAnimals((await api('animals')).animals);
+     state.animal=state.animals.find(x=>x.id===aid)||state.animals.find(x=>x.id===res?.animal?.id)||state.animal;saveActiveAnimal();
+     if(state.animal){ try{ state.skills=(await api(`animals/${state.animal.id}/skills`)).skills; }catch(_){}}
+     close();
+@@ -1456,7 +1510,7 @@
+ if(mode==='photo' && createPhotoData){
+   try{ await api(`animals/${newId}/photo`,{method:'PUT',body:JSON.stringify({photo_data:createPhotoData})}); }catch(pe){ console.warn('photo upload failed',pe); }
+ }
+-state.animals=(await api('animals')).animals;
++setAnimals((await api('animals')).animals);
+ state.animal=state.animals.find(x=>x.id===newId)||state.animals.find(x=>x.name===payload.name)||null;
+ if(!state.animal) throw new Error('Животное создано на сервере, но не вернулось в список. Обновите страницу и проверьте доступ.');
+ state.skills=state.animal?(await api(`animals/${state.animal.id}/skills`)).skills:[];
+@@ -1505,7 +1559,7 @@
+      await api(`animals/${a.id}`,{method:'PUT',body:JSON.stringify(payload)});
+      if(photoAction==='set')await api(`animals/${a.id}/photo`,{method:'PUT',body:JSON.stringify({photo_data:photoData})});
+      if(photoAction==='delete')await api(`animals/${a.id}/photo`,{method:'DELETE'});
+-     state.animals=(await api('animals')).animals;
++     setAnimals((await api('animals')).animals);
+      if(state.animal?.id===a.id)state.animal=state.animals.find(x=>x.id===a.id)||state.animal;
+      close();if(after)after();
+    }catch(err){alert(err.message)}
+--- netlify/functions/api.mjs	2026-09-13 11:13:55.000000000 +0000
++++ /tmp/patched/netlify/functions/api.mjs	2026-09-13 11:28:26.000000000 +0000
+@@ -672,7 +672,7 @@
+ 
+   if(p==='animals'){
+     if(req.method==='GET'){
+-      const r=await db.sql`SELECT a.*,COALESCE((SELECT json_agg(json_build_object('id',aa2.id,'title',aa2.title,'category',aa2.category) ORDER BY aa2.title) FROM animal_attention aa2 WHERE aa2.animal_id=a.id),'[]') attention,COALESCE((SELECT json_agg(json_build_object('id',df.id,'category',df.category,'title',df.title,'status',df.status,'note',df.note,'created_at',df.created_at) ORDER BY df.category,df.title) FROM animal_development_features df WHERE df.animal_id=a.id),'[]') development_features,COALESCE((SELECT json_agg(json_build_object('id',hf.id,'feature_type',hf.feature_type,'title',hf.title,'severity',hf.severity,'status',hf.status,'note',hf.note,'created_at',hf.created_at) ORDER BY CASE hf.severity WHEN 'critical' THEN 1 WHEN 'important' THEN 2 ELSE 3 END,hf.title) FROM animal_health_features hf WHERE hf.animal_id=a.id),'[]') health_features FROM animals a LEFT JOIN animal_access aa ON aa.animal_id=a.id AND aa.user_id=${me.id} WHERE ${me.role==='admin'} OR a.owner_id=${me.id} OR aa.user_id IS NOT NULL ORDER BY a.name`;
++      const r=await db.sql`SELECT DISTINCT ON (a.id) a.*,COALESCE((SELECT json_agg(json_build_object('id',aa2.id,'title',aa2.title,'category',aa2.category) ORDER BY aa2.title) FROM animal_attention aa2 WHERE aa2.animal_id=a.id),'[]') attention,COALESCE((SELECT json_agg(json_build_object('id',df.id,'category',df.category,'title',df.title,'status',df.status,'note',df.note,'created_at',df.created_at) ORDER BY df.category,df.title) FROM animal_development_features df WHERE df.animal_id=a.id),'[]') development_features,COALESCE((SELECT json_agg(json_build_object('id',hf.id,'feature_type',hf.feature_type,'title',hf.title,'severity',hf.severity,'status',hf.status,'note',hf.note,'created_at',hf.created_at) ORDER BY CASE hf.severity WHEN 'critical' THEN 1 WHEN 'important' THEN 2 ELSE 3 END,hf.title) FROM animal_health_features hf WHERE hf.animal_id=a.id),'[]') health_features FROM animals a LEFT JOIN animal_access aa ON aa.animal_id=a.id AND aa.user_id=${me.id} WHERE ${me.role==='admin'} OR a.owner_id=${me.id} OR aa.user_id IS NOT NULL ORDER BY a.id,a.name`;
+       return json({animals:r});
+     }
+     if(req.method==='POST' && ['admin','owner','keeper'].includes(me.effective_role)){
+--- /dev/null
++++ b/netlify/database/migrations/050_demo_baikal_enrichment.sql
++-- MOSTIK v5.4.0 demo enrichment for Байкал.
++-- Idempotent and limited to the existing demo animal. Safe for real user data.
++-- Adds a visible nutrition plan and more varied nutrition records so the Journal,
++-- Diet and Analytics screens are useful immediately after demo login.
++
++INSERT INTO diets(id,animal_id,name,description,active,target_calories,created_by)
++VALUES (
++  'demo-diet-baikal',
++  'demo-animal-baikal',
++  'Базовый рацион Байкала',
++  'Сбалансированный демонстрационный план: два основных приёма пищи и небольшой дневной перекус. Количество можно корректировать по фактическому аппетиту и активности.',
++  true, 1350, 'demo-owner'
++)
++ON CONFLICT (id) DO UPDATE SET
++  name=EXCLUDED.name,
++  description=EXCLUDED.description,
++  active=EXCLUDED.active,
++  target_calories=EXCLUDED.target_calories,
++  updated_at=now();
++
++INSERT INTO diet_periods(id,diet_id,animal_id,start_date,end_date)
++VALUES ('demo-diet-period-baikal','demo-diet-baikal','demo-animal-baikal',current_date-30,NULL)
++ON CONFLICT (id) DO NOTHING;
++
++INSERT INTO diet_meals(id,diet_id,day_offset,time_of_day,title,sort_order)
++VALUES
++ ('demo-diet-meal-baikal-am','demo-diet-baikal',0,'08:00','Утренний приём пищи',1),
++ ('demo-diet-meal-baikal-pm','demo-diet-baikal',0,'18:30','Вечерний приём пищи',2),
++ ('demo-diet-meal-baikal-snack','demo-diet-baikal',0,'14:00','Небольшой перекус',3)
++ON CONFLICT (id) DO NOTHING;
++
++INSERT INTO diet_meal_products(id,meal_id,name,quantity,calories,sort_order)
++VALUES
++ ('demo-diet-prod-baikal-am-food','demo-diet-meal-baikal-am','Полнорационный корм для собак','180 г',720,1),
++ ('demo-diet-prod-baikal-am-veg','demo-diet-meal-baikal-am','Овощи','50 г',25,2),
++ ('demo-diet-prod-baikal-pm-food','demo-diet-meal-baikal-pm','Полнорационный корм для собак','150 г',600,1),
++ ('demo-diet-prod-baikal-pm-veg','demo-diet-meal-baikal-pm','Овощи','30 г',15,2),
++ ('demo-diet-prod-baikal-snack','demo-diet-meal-baikal-snack','Небольшое лакомство','до 20 г',60,1)
++ON CONFLICT (id) DO NOTHING;
++
++-- Link recent demo food logs to planned meals and give them realistic products.
++UPDATE food_logs
++SET diet_meal_id=CASE WHEN EXTRACT(HOUR FROM logged_at)<14 THEN 'demo-diet-meal-baikal-am' ELSE 'demo-diet-meal-baikal-pm' END,
++    planned=true,
++    products=CASE WHEN EXTRACT(HOUR FROM logged_at)<14
++      THEN '[{"name":"Полнорационный корм для собак","quantity":"180 г","calories":720},{"name":"Овощи","quantity":"50 г","calories":25}]'::jsonb
++      ELSE '[{"name":"Полнорационный корм для собак","quantity":"150 г","calories":600},{"name":"Овощи","quantity":"30 г","calories":15}]'::jsonb
++    END,
++    offered=CASE WHEN EXTRACT(HOUR FROM logged_at)<14 THEN 'Корм 180 г + овощи 50 г' ELSE 'Корм 150 г + овощи 30 г' END,
++    note='Демо-запись: фактическое потребление сопоставлено с планом питания.'
++WHERE animal_id='demo-animal-baikal'
++  AND id LIKE 'demo-food-%';
++
++-- A few dated observations dedicated to Байкал make trends readable in Analytics.
++INSERT INTO observations(id,animal_id,author_id,observed_at,behavior_note,health_note,arousal,stress,concentration,appetite,pain,sleep,note)
++VALUES
++ ('demo-baikal-obs-31','demo-animal-baikal','demo-owner',now()-interval '18 days','Спокоен на прогулке, быстро переключается на проводника.','Без заметных изменений.',3,2,4,4,1,4,'Демо: после умеренной прогулки.'),
++ ('demo-baikal-obs-32','demo-animal-baikal','demo-keeper',now()-interval '11 days','Интересуется новыми предметами, охотно исследует обогащение среды.','Аппетит и общее состояние обычные.',3,1,4,5,1,4,'Демо: хорошо включается в исследовательскую активность.'),
++ ('demo-baikal-obs-33','demo-animal-baikal','demo-trainer',now()-interval '4 days','Уверенно выполняет знакомые сигналы, выдержка стала стабильнее.','Без заметных изменений.',2,1,5,4,1,5,'Демо: прогресс по навыкам «Сидеть» и «Место».')
++ON CONFLICT (id) DO NOTHING;
++
++-- One more completed training session for a visible recent trend.
++INSERT INTO sessions(id,animal_id,trainer_id,started_at,ended_at,duration_minutes,ending_type,ending_other,success_score,external_stimulus,external_reason,internal_stimulus,internal_reason,concentration,arousal)
++VALUES
++ ('demo-baikal-session-13','demo-animal-baikal','demo-trainer',now()-interval '4 days',now()-interval '4 days'+interval '24 minutes',24,'джекпот','',9,'низкий','Домашняя спокойная обстановка','низкий','Хорошая мотивация',5,2)
++ON CONFLICT (id) DO NOTHING;
++
++INSERT INTO session_skills(session_id,skill_id,repetitions)
++VALUES ('demo-baikal-session-13','demo-skill-baikal-sit',8),
++       ('demo-baikal-session-13','demo-skill-baikal-place',6)
++ON CONFLICT DO NOTHING;
