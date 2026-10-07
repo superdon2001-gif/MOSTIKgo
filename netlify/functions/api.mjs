@@ -304,7 +304,7 @@ export default async (req) => {
     }, 503);
   }
   const u=new URL(req.url), p=u.pathname.replace(/^\/api\/?/,'');
-  if(p==='health'){const c=await db.sql`SELECT count(*)::int users, count(*) FILTER (WHERE role='admin')::int admins FROM users`; return json({ok:true,app:'MOSTIK',version:'5.3.27',users:c[0].users,admins:c[0].admins});}
+  if(p==='health'){const c=await db.sql`SELECT count(*)::int users, count(*) FILTER (WHERE role='admin')::int admins FROM users`; return json({ok:true,app:'MOSTIK',version:'5.3.38',users:c[0].users,admins:c[0].admins});}
   if(p==='auth/status' && req.method==='GET'){const c=await db.sql`SELECT count(*)::int users, count(*) FILTER (WHERE role='admin')::int admins FROM users`; return json({setup_required:c[0].admins===0,users:c[0].users,admins:c[0].admins});}
   if(p==='auth/register' && req.method==='POST'){
     const b=await parse(req);
@@ -422,6 +422,102 @@ export default async (req) => {
   }
   const me=await user(req); if(!me)return json({error:'Требуется вход'},401);
   if(p==='me')return json({user:me,real_role:me.role,active_role:me.active_role||me.effective_role,roles:me.roles||[me.role]});
+  if(p==='profile' && req.method==='GET'){
+    await db.sql`CREATE TABLE IF NOT EXISTS user_profiles (
+      user_id text PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      about text, phone text, contact_note text, avatar_data text,
+      trainer_specialization text, trainer_qualification text, trainer_experience text,
+      vet_specialization text, vet_qualification text, vet_license text,
+      created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+    )`;
+    await db.sql`INSERT INTO user_profiles(user_id) VALUES(${me.id}) ON CONFLICT(user_id) DO NOTHING`;
+    const p=(await db.sql`SELECT * FROM user_profiles WHERE user_id=${me.id}`)[0]||{};
+    const [sessions,observations,food,vet,homework,diets,animals,active]=await Promise.all([
+      db.sql`SELECT count(*)::int count, COALESCE(round(avg(success_score))::int,0) avg_success FROM sessions WHERE trainer_id=${me.id}`,
+      db.sql`SELECT count(*)::int count FROM observations WHERE author_id=${me.id}`,
+      db.sql`SELECT count(*)::int count FROM food_logs WHERE author_id=${me.id}`,
+      db.sql`SELECT count(*)::int count FROM vet_records WHERE vet_id=${me.id}`,
+      db.sql`SELECT count(*)::int count FROM homework WHERE trainer_id=${me.id}`,
+      db.sql`SELECT count(*)::int count FROM diets WHERE created_by=${me.id}`.catch(()=>[{count:0}]),
+      db.sql`SELECT count(*)::int count FROM animals a WHERE a.owner_id=${me.id} OR EXISTS(SELECT 1 FROM animal_access aa WHERE aa.animal_id=a.id AND aa.user_id=${me.id})`,
+      db.sql`SELECT count(DISTINCT d)::int count FROM (
+        SELECT started_at::date d FROM sessions WHERE trainer_id=${me.id} AND started_at IS NOT NULL AND started_at>=current_date-29
+        UNION SELECT observed_at::date d FROM observations WHERE author_id=${me.id} AND observed_at>=current_date-29
+        UNION SELECT logged_at::date d FROM food_logs WHERE author_id=${me.id} AND logged_at>=current_date-29
+        UNION SELECT updated_at::date d FROM vet_records WHERE vet_id=${me.id} AND updated_at>=current_date-29
+        UNION SELECT updated_at::date d FROM homework WHERE trainer_id=${me.id} AND updated_at>=current_date-29
+      ) q`.catch(()=>[{count:0}])
+    ]);
+    const worked=await db.sql`
+      SELECT a.id,a.name,a.species,
+        count(DISTINCT s.id)::int sessions,
+        COALESCE(round(avg(s.success_score))::int,0) avg_success
+      FROM animals a
+      LEFT JOIN sessions s ON s.animal_id=a.id AND s.trainer_id=${me.id}
+      WHERE a.owner_id=${me.id} OR EXISTS(SELECT 1 FROM animal_access aa WHERE aa.animal_id=a.id AND aa.user_id=${me.id}) OR s.id IS NOT NULL
+      GROUP BY a.id,a.name,a.species
+      HAVING count(DISTINCT s.id)>0
+      ORDER BY sessions DESC,a.name
+      LIMIT 100`;
+    const training=await db.sql`
+      SELECT a.name,a.species,count(s.id)::int sessions,COALESCE(round(avg(s.success_score))::int,0) avg_success
+      FROM sessions s JOIN animals a ON a.id=s.animal_id
+      WHERE s.trainer_id=${me.id}
+      GROUP BY a.id,a.name,a.species ORDER BY sessions DESC,a.name LIMIT 100`;
+    const vetBy=await db.sql`
+      SELECT a.name,a.species,count(v.id)::int records
+      FROM vet_records v JOIN animals a ON a.id=v.animal_id
+      WHERE v.vet_id=${me.id}
+      GROUP BY a.id,a.name,a.species ORDER BY records DESC,a.name LIMIT 100`;
+    const roles=me.roles||[me.role];
+    return json({
+      profile:{...me,...p,roles,effective_role:me.effective_role},
+      role_profile:{trainer:{specialization:p.trainer_specialization||'',qualification:p.trainer_qualification||'',experience:p.trainer_experience||''},vet:{specialization:p.vet_specialization||'',qualification:p.vet_qualification||'',license:p.vet_license||''}},
+      analytics:{
+        sessions:sessions[0]?.count||0,avg_success:sessions[0]?.avg_success||0,observations:observations[0]?.count||0,
+        food:food[0]?.count||0,vet:vet[0]?.count||0,homework:homework[0]?.count||0,diets:diets[0]?.count||0,
+        animals:animals[0]?.count||0,active_days_30:active[0]?.count||0,
+        worked_animals:worked,training_by_animal:training,vet_by_animal:vetBy
+      }
+    });
+  }
+  if(p==='profile' && req.method==='PUT'){
+    const b=await parse(req);
+    const text=(v,max=4000)=>String(v??'').trim().slice(0,max);
+    const avatar=b.avatar_data===undefined?undefined:String(b.avatar_data||'');
+    if(avatar!==undefined && avatar.length>3_000_000)return json({error:'Фото слишком большое'},400);
+    await db.sql`CREATE TABLE IF NOT EXISTS user_profiles (
+      user_id text PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      about text, phone text, contact_note text, avatar_data text,
+      trainer_specialization text, trainer_qualification text, trainer_experience text,
+      vet_specialization text, vet_qualification text, vet_license text,
+      created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+    )`;
+    await db.sql`INSERT INTO user_profiles(user_id) VALUES(${me.id}) ON CONFLICT(user_id) DO NOTHING`;
+    if(b.display_name!==undefined){
+      const name=text(b.display_name,160); if(!name)return json({error:'Имя не может быть пустым'},400);
+      await db.sql`UPDATE users SET display_name=${name} WHERE id=${me.id}`;
+    }
+    const current=(await db.sql`SELECT * FROM user_profiles WHERE user_id=${me.id}`)[0]||{};
+    const tp=b.trainer_profile||{}, vp=b.vet_profile||{};
+    const fields={
+      about:b.about===undefined?current.about||'':text(b.about),
+      phone:b.phone===undefined?current.phone||'':text(b.phone,120),
+      contact_note:b.contact_note===undefined?current.contact_note||'':text(b.contact_note),
+      trainer_specialization:tp.specialization===undefined?current.trainer_specialization||'':text(tp.specialization,500),
+      trainer_qualification:tp.qualification===undefined?current.trainer_qualification||'':text(tp.qualification,500),
+      trainer_experience:tp.experience===undefined?current.trainer_experience||'':text(tp.experience,500),
+      vet_specialization:vp.specialization===undefined?current.vet_specialization||'':text(vp.specialization,500),
+      vet_qualification:vp.qualification===undefined?current.vet_qualification||'':text(vp.qualification,500),
+      vet_license:vp.license===undefined?current.vet_license||'':text(vp.license,300)
+    };
+    await db.sql`UPDATE user_profiles SET about=${fields.about},phone=${fields.phone},contact_note=${fields.contact_note},
+      trainer_specialization=${fields.trainer_specialization},trainer_qualification=${fields.trainer_qualification},trainer_experience=${fields.trainer_experience},
+      vet_specialization=${fields.vet_specialization},vet_qualification=${fields.vet_qualification},vet_license=${fields.vet_license},
+      avatar_data=CASE WHEN ${avatar===undefined} THEN avatar_data ELSE ${avatar} END,updated_at=now() WHERE user_id=${me.id}`;
+    const fresh=(await db.sql`SELECT u.id,u.email,u.display_name,u.role,COALESCE((SELECT array_agg(ur.role ORDER BY ur.role) FROM user_roles ur WHERE ur.user_id=u.id),ARRAY[u.role]) roles,sa.active_role,CASE WHEN sa.active_role IS NOT NULL AND EXISTS(SELECT 1 FROM user_roles ur2 WHERE ur2.user_id=u.id AND ur2.role=sa.active_role) THEN sa.active_role ELSE u.role END effective_role,up.about,up.phone,up.contact_note,up.avatar_data FROM sessions_auth sa JOIN users u ON u.id=sa.user_id LEFT JOIN user_profiles up ON up.user_id=u.id WHERE sa.id=${sid(req)} LIMIT 1`)[0];
+    return json({ok:true,profile:fresh});
+  }
   if(p==='role' && req.method==='PUT'){
     const b=await parse(req), role=String(b.role||'').trim();
     const roles=Array.isArray(me.roles)?me.roles:[me.role];
@@ -714,7 +810,7 @@ export default async (req) => {
       if(!ok.length)return json({error:'Владелец не найден'},404);
       ownerId=String(b.owner_id);
     }
-    await db.sql`UPDATE animals SET name=${name},species=${species},breed=${String(b.breed||'')},sex=${b.sex||null},birth_date=${b.birth_date||null},weight_kg=${b.weight_kg===''||b.weight_kg==null?null:Number(b.weight_kg)},height_cm=${b.height_cm===''||b.height_cm==null?null:Number(b.height_cm)},description=${String(b.description||'')},microchip=${String(b.microchip||'').trim()||null},owner_id=${ownerId} WHERE id=${aid}`;
+    await db.sql`UPDATE animals SET name=${name},species=${species},breed=${String(b.breed||'')},sex=${b.sex||null},birth_date=${b.birth_date||null},weight_kg=${b.weight_kg===''||b.weight_kg==null?null:Number(b.weight_kg)},height_cm=${b.height_cm===''||b.height_cm==null?null:Number(b.height_cm)},description=${String(b.description||'')},habitat_note=${String(b.habitat_note||'')},social_structure=${String(b.social_structure||'')},diet_profile=${String(b.diet_profile||'')},prefers=${String(b.prefers||'')},avoids=${String(b.avoids||'')},human_experience=${String(b.human_experience||'')},microchip=${String(b.microchip||'').trim()||null},owner_id=${ownerId} WHERE id=${aid}`;
     if(Array.isArray(b.attention)){
       await db.sql`DELETE FROM animal_attention WHERE animal_id=${aid}`;
       const seen=new Set();
@@ -830,15 +926,73 @@ export default async (req) => {
       const b=await parse(req); await db.sql`DELETE FROM animal_development_features WHERE id=${String(b.id||'')} AND animal_id=${aid}`;return json({ok:true});
     }
   }
-  const m=p.match(/^animals\/([^/]+)\/skills$/); if(m){const aid=m[1]; const allowed=await allowedAnimal(me,aid); if(!allowed)return json({error:'Нет доступа к животному'},403); if(req.method==='GET'){const r=await db.sql`SELECT s.*,COALESCE(s.mastered,false) mastered,coalesce(json_agg(json_build_object('id',st.id,'step_no',st.step_no,'title',st.title,'goal',st.goal,'criterion',st.criterion,'bridge',st.bridge,'reinforcement',st.reinforcement,'reinforcement_other',st.reinforcement_other,'reinforcement_schedule',st.reinforcement_schedule) ORDER BY st.step_no) FILTER(WHERE st.id IS NOT NULL),'[]') steps FROM skills s LEFT JOIN skill_steps st ON st.skill_id=s.id WHERE s.animal_id=${aid} GROUP BY s.id ORDER BY s.name`;return json({skills:r});}
-    if(req.method==='POST'){if(!['admin','trainer'].includes(me.effective_role))return json({error:'Только тренер или администратор'},403); const b=await parse(req), sid=id(); await db.sql`INSERT INTO skills(id,animal_id,name,signal,goal) VALUES(${sid},${aid},${b.name},${b.signal||''},${b.goal||''})`; for(let i=0;i<(b.steps||[]).length;i++){const s=b.steps[i]; await db.sql`INSERT INTO skill_steps(id,skill_id,step_no,title,goal,criterion,bridge,reinforcement,reinforcement_other,reinforcement_schedule) VALUES(${id()},${sid},${i+1},${s.title||''},${s.goal||''},${s.criterion||''},${s.bridge||'нет'},${s.reinforcement||'пищевое'},${s.reinforcement_other||''},${s.reinforcement_schedule||'постоянный'})`;} return json({ok:true,id:sid},201)}
+  const reinforcerMatch=p.match(/^animals\/([^/]+)\/reinforcers(?:\/([^/]+))?$/);
+  if(reinforcerMatch){
+    const aid=reinforcerMatch[1], rid=reinforcerMatch[2]||null;
+    if(!(await allowedAnimal(me,aid))) return json({error:'Нет доступа к животному'},403);
+    if(req.method==='GET'){
+      const rows=await db.sql`SELECT * FROM animal_reinforcers WHERE animal_id=${aid} AND active=true ORDER BY sort_order,name`;
+      return json({reinforcers:rows});
+    }
+    if(req.method==='POST'){
+      if(!['admin','trainer','keeper','owner'].includes(me.effective_role)) return json({error:'Недоступно для этой роли'},403);
+      const b=await parse(req), name=String(b.name||'').trim();
+      if(!name) return json({error:'Укажите название подкрепителя'},400);
+      const idv=id();
+      await db.sql`INSERT INTO animal_reinforcers(id,animal_id,name,kind,notes,sort_order) VALUES(${idv},${aid},${name},${['primary','secondary','either'].includes(String(b.kind))?String(b.kind):'either'},${String(b.notes||'')},${Number(b.sort_order||0)})`;
+      return json({ok:true,id:idv},201);
+    }
+    if(req.method==='DELETE' && rid){
+      if(!['admin','trainer','keeper','owner'].includes(me.effective_role)) return json({error:'Недоступно для этой роли'},403);
+      await db.sql`UPDATE animal_reinforcers SET active=false,updated_at=now() WHERE id=${rid} AND animal_id=${aid}`;
+      return json({ok:true});
+    }
+  }
+  const chainAnimalMatch=p.match(/^animals\/([^/]+)\/chains$/);
+  if(chainAnimalMatch){
+    const aid=chainAnimalMatch[1]; if(!(await allowedAnimal(me,aid)))return json({error:'Нет доступа к животному'},403);
+    if(req.method==='GET'){const rows=await db.sql`SELECT c.*,coalesce(json_agg(json_build_object('id',cs.id,'step_no',cs.step_no,'skill_id',cs.skill_id,'skill_name',s.name,'repetitions',cs.repetitions,'note',cs.note) ORDER BY cs.step_no) FILTER(WHERE cs.id IS NOT NULL),'[]') steps FROM skill_chains c LEFT JOIN skill_chain_steps cs ON cs.chain_id=c.id LEFT JOIN skills s ON s.id=cs.skill_id WHERE c.animal_id=${aid} GROUP BY c.id ORDER BY c.updated_at DESC`;return json({chains:rows});}
+    if(req.method==='POST'){if(!['admin','trainer','keeper','owner'].includes(me.effective_role))return json({error:'Недоступно для этой роли'},403);const b=await parse(req);if(!String(b.name||'').trim())return json({error:'Укажите название цепочки'},400);const cid=id();await db.sql`INSERT INTO skill_chains(id,animal_id,name,description,created_by) VALUES(${cid},${aid},${String(b.name).trim()},${String(b.description||'')},${me.id})`;for(let i=0;i<(b.steps||[]).length;i++){const x=b.steps[i];if(!x.skill_id)continue;await db.sql`INSERT INTO skill_chain_steps(id,chain_id,skill_id,step_no,repetitions,note) VALUES(${id()},${cid},${x.skill_id},${i+1},${Math.max(1,Number(x.repetitions||1))},${String(x.note||'')})`;}return json({ok:true,id:cid},201);}
+  }
+  const chainMatch=p.match(/^chains\/([^/]+)$/);
+  if(chainMatch){
+    const row=await db.sql`SELECT c.id,c.animal_id FROM skill_chains c WHERE c.id=${chainMatch[1]}`;
+    if(!row.length)return json({error:'Цепочка не найдена'},404);
+    if(!(await allowedAnimal(me,row[0].animal_id)))return json({error:'Нет доступа'},403);
+    if(req.method==='DELETE'){await db.sql`DELETE FROM skill_chains WHERE id=${chainMatch[1]}`;return json({ok:true});}
+    if(req.method==='PUT'){
+      if(!['admin','trainer','keeper','owner'].includes(me.effective_role))return json({error:'Недоступно для этой роли'},403);
+      const b=await parse(req), name=String(b.name||'').trim();
+      if(!name)return json({error:'Укажите название цепочки'},400);
+      await db.sql`UPDATE skill_chains SET name=${name},description=${String(b.description||'')},updated_at=now() WHERE id=${chainMatch[1]}`;
+      await db.sql`DELETE FROM skill_chain_steps WHERE chain_id=${chainMatch[1]}`;
+      for(let i=0;i<(b.steps||[]).length;i++){const x=b.steps[i];if(!x.skill_id)continue;await db.sql`INSERT INTO skill_chain_steps(id,chain_id,skill_id,step_no,repetitions,note) VALUES(${id()},${chainMatch[1]},${x.skill_id},${i+1},${Math.max(1,Number(x.repetitions||1))},${String(x.note||'')})`;}
+      return json({ok:true});
+    }
+  }
+  const desAnimalMatch=p.match(/^animals\/([^/]+)\/desensitization$/);
+  if(desAnimalMatch){const aid=desAnimalMatch[1];if(!(await allowedAnimal(me,aid)))return json({error:'Нет доступа к животному'},403);if(req.method==='GET'){const rows=await db.sql`SELECT p.*,coalesce(json_agg(json_build_object('id',s.id,'step_no',s.step_no,'title',s.title,'description',s.description,'comfort_level',s.comfort_level,'target_comfort',s.target_comfort,'duration_seconds',s.duration_seconds,'criterion',s.criterion,'completed',s.completed) ORDER BY s.step_no) FILTER(WHERE s.id IS NOT NULL),'[]') steps FROM desensitization_plans p LEFT JOIN desensitization_steps s ON s.plan_id=p.id WHERE p.animal_id=${aid} GROUP BY p.id ORDER BY p.updated_at DESC`;return json({plans:rows});}if(req.method==='POST'){if(!['admin','trainer','keeper','owner','vet'].includes(me.effective_role))return json({error:'Недоступно для этой роли'},403);const b=await parse(req);if(!String(b.name||'').trim())return json({error:'Укажите название плана'},400);const pid=id();await db.sql`INSERT INTO desensitization_plans(id,animal_id,name,procedure,template_id,status,created_by) VALUES(${pid},${aid},${String(b.name).trim()},${String(b.procedure||'')},${b.template_id||null},'active',${me.id})`;for(let i=0;i<(b.steps||[]).length;i++){const x=b.steps[i];await db.sql`INSERT INTO desensitization_steps(id,plan_id,step_no,title,description,comfort_level,target_comfort,duration_seconds,criterion) VALUES(${id()},${pid},${i+1},${String(x.title||('Ступень '+(i+1)))},${String(x.description||'')},${x.comfort_level==null?null:Number(x.comfort_level)},${x.target_comfort==null?5:Number(x.target_comfort)},${x.duration_seconds==null?null:Number(x.duration_seconds)},${String(x.criterion||'')})`;}return json({ok:true,id:pid},201);}}
+  const desStepMatch=p.match(/^desensitization\/([^/]+)\/steps\/([^/]+)$/);
+  if(desStepMatch&&req.method==='PUT'){const row=await db.sql`SELECT p.animal_id FROM desensitization_steps s JOIN desensitization_plans p ON p.id=s.plan_id WHERE s.id=${desStepMatch[2]} AND p.id=${desStepMatch[1]}`;if(!row.length||!(await allowedAnimal(me,row[0].animal_id)))return json({error:'Нет доступа'},403);const b=await parse(req);await db.sql`UPDATE desensitization_steps SET comfort_level=COALESCE(${b.comfort_level==null?null:Number(b.comfort_level)},comfort_level),completed=COALESCE(${b.completed==null?null:!!b.completed},completed) WHERE id=${desStepMatch[2]}`;return json({ok:true});}
+  const m=p.match(/^animals\/([^/]+)\/skills$/); if(m){const aid=m[1]; const allowed=await allowedAnimal(me,aid); if(!allowed)return json({error:'Нет доступа к животному'},403); if(req.method==='GET'){const r=await db.sql`SELECT s.*,COALESCE(s.mastered,false) mastered,COALESCE(s.training_stage,'learning') training_stage,COALESCE(s.rule_immediate_reinforcement,false) rule_immediate_reinforcement,COALESCE(s.rule_one_signal_one_behavior,false) rule_one_signal_one_behavior,COALESCE(s.rule_gradual_criteria,false) rule_gradual_criteria,COALESCE(s.rule_generalization,false) rule_generalization,coalesce(json_agg(json_build_object('id',st.id,'step_no',st.step_no,'title',st.title,'goal',st.goal,'criterion',st.criterion,'bridge',st.bridge,'reinforcement',st.reinforcement,'reinforcement_other',st.reinforcement_other,'reinforcement_schedule',st.reinforcement_schedule,'step_type',st.step_type,'criterion_met',st.criterion_met) ORDER BY st.step_no) FILTER(WHERE st.id IS NOT NULL),'[]') steps FROM skills s LEFT JOIN skill_steps st ON st.skill_id=s.id WHERE s.animal_id=${aid} GROUP BY s.id ORDER BY s.name`;return json({skills:r});}
+    if(req.method==='POST'){if(!['admin','trainer'].includes(me.effective_role))return json({error:'Только тренер или администратор'},403); const b=await parse(req), sid=id(); await db.sql`INSERT INTO skills(id,animal_id,name,signal,goal) VALUES(${sid},${aid},${b.name},${b.signal||''},${b.goal||''})`; for(let i=0;i<(b.steps||[]).length;i++){const s=b.steps[i]; await db.sql`INSERT INTO skill_steps(id,skill_id,step_no,title,goal,criterion,bridge,reinforcement,reinforcement_other,reinforcement_schedule,step_type,criterion_met) VALUES(${id()},${sid},${i+1},${s.title||''},${s.goal||''},${s.criterion||''},${s.bridge||'нет'},${s.reinforcement||'пищевое'},${s.reinforcement_other||''},${s.reinforcement_schedule||'постоянный'},${['target','capture','shaping','model','mimic','other'].includes(String(s.step_type||''))?String(s.step_type):'other'},${!!s.criterion_met})`;} return json({ok:true,id:sid},201)}
+  }
+  const stepMatch=p.match(/^animals\/([^/]+)\/skills\/([^/]+)\/steps\/([^/]+)$/);
+  if(stepMatch && req.method==='PUT'){
+    const aid=stepMatch[1], skillId=stepMatch[2], stepId=stepMatch[3];
+    if(!(await allowedAnimal(me,aid)))return json({error:'Нет доступа к животному'},403);
+    if(!['admin','trainer'].includes(me.effective_role))return json({error:'Только тренер или администратор'},403);
+    const b=await parse(req);
+    const allowedTypes=['target','capture','shaping','model','mimic','other'];
+    await db.sql`UPDATE skill_steps SET step_type=COALESCE(${b.step_type==null?null:String(b.step_type)},step_type), criterion_met=COALESCE(${b.criterion_met==null?null:!!b.criterion_met},criterion_met) WHERE id=${stepId} AND skill_id=${skillId}`;
+    return json({ok:true});
   }
   const skillStatusMatch=p.match(/^animals\/([^/]+)\/skills\/([^/]+)$/);
   if(skillStatusMatch){
     const aid=skillStatusMatch[1], skillId=skillStatusMatch[2]; if(!(await allowedAnimal(me,aid)))return json({error:'Нет доступа к животному'},403);
     if(req.method==='PUT'){
       if(!['admin','trainer'].includes(me.effective_role))return json({error:'Только тренер или администратор'},403);
-      const b=await parse(req); await db.sql`UPDATE skills SET mastered=${!!b.mastered} WHERE id=${skillId} AND animal_id=${aid}`; return json({ok:true});
+      const b=await parse(req); await db.sql`UPDATE skills SET mastered=COALESCE(${b.mastered==null?null:!!b.mastered},mastered),training_stage=COALESCE(${b.training_stage||null},training_stage),rule_immediate_reinforcement=COALESCE(${b.rule_immediate_reinforcement==null?null:!!b.rule_immediate_reinforcement},rule_immediate_reinforcement),rule_one_signal_one_behavior=COALESCE(${b.rule_one_signal_one_behavior==null?null:!!b.rule_one_signal_one_behavior},rule_one_signal_one_behavior),rule_gradual_criteria=COALESCE(${b.rule_gradual_criteria==null?null:!!b.rule_gradual_criteria},rule_gradual_criteria),rule_generalization=COALESCE(${b.rule_generalization==null?null:!!b.rule_generalization},rule_generalization) WHERE id=${skillId} AND animal_id=${aid}`; return json({ok:true});
     }
     if(req.method==='DELETE'){
       if(!['admin','trainer'].includes(me.effective_role))return json({error:'Только тренер или администратор'},403);
@@ -917,6 +1071,22 @@ export default async (req) => {
     const scheduled=await db.sql`SELECT si.id,si.type,si.title,si.details,si.scheduled_at,si.status FROM scheduled_items si WHERE si.animal_id=${aid} AND si.scheduled_at>=${from} AND si.scheduled_at<${to} ORDER BY si.scheduled_at`;
     return json({observations,food,sessions,homework,vet,medications,reminders,scheduled});
   }
+  // Problem solving / aggression
+  const problemAnimalMatch=p.match(/^animals\/([^/]+)\/problems$/);
+  if(problemAnimalMatch){
+    const aid=problemAnimalMatch[1]; if(!(await allowedAnimal(me,aid)))return json({error:'Нет доступа к животному'},403);
+    if(req.method==='GET'){const rows=await db.sql`SELECT bp.*, ap.aggression_type,ap.antecedents,ap.warning_signs,ap.extinction_burst_warning,ap.physical_cause,ap.vet_recommended,ap.note aggression_note, COALESCE((SELECT json_agg(w ORDER BY w.week_start DESC) FROM behavior_problem_weeks w WHERE w.problem_id=bp.id),'[]') weeks FROM behavior_problems bp LEFT JOIN aggression_profiles ap ON ap.problem_id=bp.id WHERE bp.animal_id=${aid} ORDER BY bp.updated_at DESC`; return json({problems:rows});}
+    if(req.method==='POST'){const b=await parse(req), pid=id(); await db.sql`INSERT INTO behavior_problems(id,animal_id,created_by,title,status,frequency,context,what_happens,cause_type,cause_note,method,plan,start_date) VALUES(${pid},${aid},${me.id},${String(b.title||'Проблема поведения')},${b.status||'active'},${b.frequency||''},${b.context||''},${b.what_happens||''},${b.cause_type||null},${b.cause_note||''},${b.method||null},${b.plan||''},${b.start_date||null})`; if(b.aggression){const a=b.aggression; await db.sql`INSERT INTO aggression_profiles(problem_id,aggression_type,antecedents,warning_signs,extinction_burst_warning,physical_cause,vet_recommended,note) VALUES(${pid},${a.aggression_type||null},${a.antecedents||''},${a.warning_signs||''},${a.extinction_burst_warning!==false},${!!a.physical_cause},${!!a.vet_recommended},${a.note||''}) ON CONFLICT(problem_id) DO UPDATE SET aggression_type=EXCLUDED.aggression_type,antecedents=EXCLUDED.antecedents,warning_signs=EXCLUDED.warning_signs,extinction_burst_warning=EXCLUDED.extinction_burst_warning,physical_cause=EXCLUDED.physical_cause,vet_recommended=EXCLUDED.vet_recommended,note=EXCLUDED.note`;} return json({ok:true,id:pid},201);}
+  }
+  const problemMatch=p.match(/^problems\/([^/]+)$/);
+  if(problemMatch){const pid=problemMatch[1]; const rows=await db.sql`SELECT animal_id FROM behavior_problems WHERE id=${pid}`; if(!rows.length)return json({error:'Проблема не найдена'},404); if(!(await allowedAnimal(me,rows[0].animal_id)))return json({error:'Нет доступа'},403); if(req.method==='PUT'){const b=await parse(req); await db.sql`UPDATE behavior_problems SET title=${String(b.title||'Проблема поведения')},status=${b.status||'active'},frequency=${b.frequency||''},context=${b.context||''},what_happens=${b.what_happens||''},cause_type=${b.cause_type||null},cause_note=${b.cause_note||''},method=${b.method||null},plan=${b.plan||''},start_date=${b.start_date||null},updated_at=now() WHERE id=${pid}`; if(b.aggression){const a=b.aggression; await db.sql`INSERT INTO aggression_profiles(problem_id,aggression_type,antecedents,warning_signs,extinction_burst_warning,physical_cause,vet_recommended,note) VALUES(${pid},${a.aggression_type||null},${a.antecedents||''},${a.warning_signs||''},${a.extinction_burst_warning!==false},${!!a.physical_cause},${!!a.vet_recommended},${a.note||''}) ON CONFLICT(problem_id) DO UPDATE SET aggression_type=EXCLUDED.aggression_type,antecedents=EXCLUDED.antecedents,warning_signs=EXCLUDED.warning_signs,extinction_burst_warning=EXCLUDED.extinction_burst_warning,physical_cause=EXCLUDED.physical_cause,vet_recommended=EXCLUDED.vet_recommended,note=EXCLUDED.note`;} return json({ok:true});}}
+  const weekMatch=p.match(/^problems\/([^/]+)\/weeks$/);
+  if(weekMatch && req.method==='POST'){const pid=weekMatch[1]; const rows=await db.sql`SELECT animal_id FROM behavior_problems WHERE id=${pid}`; if(!rows.length||!(await allowedAnimal(me,rows[0].animal_id)))return json({error:'Нет доступа'},403); const b=await parse(req); await db.sql`INSERT INTO behavior_problem_weeks(id,problem_id,week_start,measure,result,note) VALUES(${id()},${pid},${b.week_start},${b.measure||''},${b.result||''},${b.note||''}) ON CONFLICT(problem_id,week_start) DO UPDATE SET measure=EXCLUDED.measure,result=EXCLUDED.result,note=EXCLUDED.note`; return json({ok:true});}
+  const signalMatch=p.match(/^animals\/([^/]+)\/signals$/);
+  if(signalMatch){const aid=signalMatch[1]; if(!(await allowedAnimal(me,aid)))return json({error:'Нет доступа'},403); if(req.method==='GET')return json({signals:await db.sql`SELECT * FROM animal_signals WHERE animal_id=${aid} AND active=true ORDER BY name`}); if(req.method==='POST'){const b=await parse(req); const sid=id(); await db.sql`INSERT INTO animal_signals(id,animal_id,name,signal_type,meaning) VALUES(${sid},${aid},${String(b.name||'').trim()},${b.signal_type||'other'},${b.meaning||''}) ON CONFLICT(animal_id,name) DO UPDATE SET signal_type=EXCLUDED.signal_type,meaning=EXCLUDED.meaning,active=true`; return json({ok:true,id:sid},201);}}
+  const signalConflictMatch=p.match(/^animals\/([^/]+)\/signals\/conflicts$/);
+  if(signalConflictMatch && req.method==='GET'){const aid=signalConflictMatch[1]; if(!(await allowedAnimal(me,aid)))return json({error:'Нет доступа'},403); const rows=await db.sql`SELECT lower(trim(signal)) signal, array_agg(name ORDER BY name) skill_names, count(*)::int skill_count FROM skills WHERE animal_id=${aid} AND COALESCE(trim(signal),'')<>'' GROUP BY lower(trim(signal)) HAVING count(*)>1`; return json({conflicts:rows});}
+
   const sessionMatch=p.match(/^sessions\/([^/]+)$/);
   if(sessionMatch && req.method==='GET'){
     const sid=sessionMatch[1];
@@ -929,10 +1099,10 @@ export default async (req) => {
     const q=new URL(req.url).searchParams, aid=q.get('animal_id');
     if(aid && !(await allowedAnimal(me,aid)))return json({error:'Нет доступа к животному'},403);
     const r=aid
-      ? await db.sql`SELECT s.id,s.animal_id,s.trainer_id,s.started_at,s.ended_at,s.duration_minutes,s.ending_type,s.ending_other,s.success_score,s.external_stimulus,s.external_reason,s.internal_stimulus,s.internal_reason,s.concentration,s.arousal,a.name animal_name,u.display_name author FROM sessions s JOIN animals a ON a.id=s.animal_id JOIN users u ON u.id=s.trainer_id WHERE s.animal_id=${aid} ORDER BY s.started_at DESC LIMIT 300`
+      ? await db.sql`SELECT s.id,s.animal_id,s.trainer_id,s.started_at,s.ended_at,s.duration_minutes,s.ending_type,s.ending_other,s.success_score,s.external_stimulus,s.external_reason,s.internal_stimulus,s.internal_reason,s.concentration,s.arousal,s.welfare_goal,s.plan_note,s.summary_note,s.bridge_used,s.primary_reinforcement,s.secondary_reinforcement,s.error_occurred,s.error_response,s.error_type,s.error_note,a.name animal_name,u.display_name author FROM sessions s JOIN animals a ON a.id=s.animal_id JOIN users u ON u.id=s.trainer_id WHERE s.animal_id=${aid} ORDER BY s.started_at DESC LIMIT 300`
       : me.role==='admin'
-        ? await db.sql`SELECT s.id,s.animal_id,s.trainer_id,s.started_at,s.ended_at,s.duration_minutes,s.ending_type,s.ending_other,s.success_score,s.external_stimulus,s.external_reason,s.internal_stimulus,s.internal_reason,s.concentration,s.arousal,a.name animal_name,u.display_name author FROM sessions s JOIN animals a ON a.id=s.animal_id JOIN users u ON u.id=s.trainer_id ORDER BY s.started_at DESC LIMIT 500`
-        : await db.sql`SELECT s.id,s.animal_id,s.trainer_id,s.started_at,s.ended_at,s.duration_minutes,s.ending_type,s.ending_other,s.success_score,s.external_stimulus,s.external_reason,s.internal_stimulus,s.internal_reason,s.concentration,s.arousal,a.name animal_name,u.display_name author FROM sessions s JOIN animals a ON a.id=s.animal_id JOIN users u ON u.id=s.trainer_id LEFT JOIN animal_access aa ON aa.animal_id=a.id AND aa.user_id=${me.id} WHERE a.owner_id=${me.id} OR aa.user_id IS NOT NULL ORDER BY s.started_at DESC LIMIT 500`;
+        ? await db.sql`SELECT s.id,s.animal_id,s.trainer_id,s.started_at,s.ended_at,s.duration_minutes,s.ending_type,s.ending_other,s.success_score,s.external_stimulus,s.external_reason,s.internal_stimulus,s.internal_reason,s.concentration,s.arousal,s.welfare_goal,s.plan_note,s.summary_note,s.bridge_used,s.primary_reinforcement,s.secondary_reinforcement,s.error_occurred,s.error_response,s.error_type,s.error_note,a.name animal_name,u.display_name author FROM sessions s JOIN animals a ON a.id=s.animal_id JOIN users u ON u.id=s.trainer_id ORDER BY s.started_at DESC LIMIT 500`
+        : await db.sql`SELECT s.id,s.animal_id,s.trainer_id,s.started_at,s.ended_at,s.duration_minutes,s.ending_type,s.ending_other,s.success_score,s.external_stimulus,s.external_reason,s.internal_stimulus,s.internal_reason,s.concentration,s.arousal,s.welfare_goal,s.plan_note,s.summary_note,s.bridge_used,s.primary_reinforcement,s.secondary_reinforcement,s.error_occurred,s.error_response,s.error_type,s.error_note,a.name animal_name,u.display_name author FROM sessions s JOIN animals a ON a.id=s.animal_id JOIN users u ON u.id=s.trainer_id LEFT JOIN animal_access aa ON aa.animal_id=a.id AND aa.user_id=${me.id} WHERE a.owner_id=${me.id} OR aa.user_id IS NOT NULL ORDER BY s.started_at DESC LIMIT 500`;
     return json({sessions:r});
   }
   if(sessionMatch && req.method==='DELETE'){
@@ -956,7 +1126,7 @@ export default async (req) => {
       if(['done','completed','complete'].includes(String(hw[0].status||'').toLowerCase()))return json({error:'Домашнее задание уже выполнено'},409);
     }
     const sid=id();
-    await db.sql`INSERT INTO sessions(id,animal_id,trainer_id,session_type,homework_id,started_at,ended_at,duration_minutes,ending_type,ending_other,success_score,external_stimulus,external_reason,internal_stimulus,internal_reason,concentration,arousal) VALUES(${sid},${b.animal_id},${me.id},${sessionType},${homeworkId},${b.started_at},${b.ended_at},${b.duration_minutes},${b.ending_type},${b.ending_other||''},${b.success_score},${b.external_stimulus},${b.external_reason||''},${b.internal_stimulus},${b.internal_reason||''},${b.concentration},${b.arousal})`;
+    await db.sql`INSERT INTO sessions(id,animal_id,trainer_id,session_type,homework_id,started_at,ended_at,duration_minutes,ending_type,ending_other,success_score,external_stimulus,external_reason,internal_stimulus,internal_reason,concentration,arousal,welfare_goal,plan_note,summary_note,bridge_used,primary_reinforcement,secondary_reinforcement,error_occurred,error_response,error_type,error_note) VALUES(${sid},${b.animal_id},${me.id},${sessionType},${homeworkId},${b.started_at},${b.ended_at},${b.duration_minutes},${b.ending_type},${b.ending_other||''},${b.success_score},${b.external_stimulus},${b.external_reason||''},${b.internal_stimulus},${b.internal_reason||''},${b.concentration},${b.arousal},${b.welfare_goal||null},${b.plan_note||''},${b.summary_note||''},${b.bridge_used||''},${b.primary_reinforcement||''},${b.secondary_reinforcement||''},${!!b.error_occurred},${b.error_response||null},${b.error_type||null},${b.error_note||''})`;
     for(const sk of b.skills||[])await db.sql`INSERT INTO session_skills(session_id,skill_id,repetitions) VALUES(${sid},${sk.skill_id},${Number(sk.repetitions||0)})`;
     if(homeworkId)await db.sql`UPDATE homework SET status='done',updated_at=now() WHERE id=${homeworkId}`;
     return json({ok:true,id:sid},201);
@@ -989,6 +1159,67 @@ export default async (req) => {
       const oid=id(); await db.sql`INSERT INTO observations(id,animal_id,author_id,observed_at,behavior_category,behavior_action,state_signs,interaction_target,behavior_note,health_note,activity,arousal,stress,concentration,appetite,pain,sleep,note) VALUES(${oid},${b.animal_id},${me.id},${b.observed_at||new Date().toISOString()},${b.behavior_category||null},${b.behavior_action||null},${b.state_signs||null},${b.interaction_target||null},${b.behavior_note||''},${b.health_note||''},${b.activity||null},${b.arousal||null},${b.stress||null},${b.concentration||null},${b.appetite||null},${b.pain||null},${b.sleep||null},${b.note||''})`; return json({ok:true,id:oid},201);
     }
   }
+
+  // ========== EDITABLE GLOSSARY ==========
+  if(p==='glossary' && req.method==='GET'){
+    const defaults=[
+      ['Положительное подкрепление','ПП','После нужного поведения появляется ценное последствие, которое повышает вероятность повторения поведения.','Подкрепление','Karen Pryor / обучение поведению'],
+      ['Маркер','MARK','Короткий сигнал, точно сообщающий: этот момент поведения сейчас стоит подкрепить.','Обучение','MOSTIK'],
+      ['Мостик','BR','Условный сигнал, который связывает нужный момент поведения с последующим подкреплением.','Обучение','MOSTIK'],
+      ['CRF','CRF','Непрерывный график: подкрепление после каждого подходящего ответа.','Графики подкрепления','MOSTIK'],
+      ['FR','FR','Фиксированный коэффициент: подкрепление после заранее заданного числа ответов.','Графики подкрепления','MOSTIK'],
+      ['VR','VR','Переменный коэффициент: число ответов до подкрепления меняется вокруг заданного среднего.','Графики подкрепления','MOSTIK'],
+      ['FI','FI','Фиксированный интервал: подкрепление доступно после заданного промежутка времени при наличии нужного поведения.','Графики подкрепления','MOSTIK'],
+      ['VI','VI','Переменный интервал: интервал до доступного подкрепления меняется вокруг среднего значения.','Графики подкрепления','MOSTIK'],
+      ['LRS','Least Reinforcing Scenario','Короткий сценарий минимального подкрепления после ошибки без наказания; в MOSTIK используется как мягкая процедура восстановления.','Обучение','MOSTIK'],
+      ['Станция','STATION','Обученное место или позиция, где животное добровольно остаётся для безопасной работы или ухода.','Уход и обучение','MOSTIK'],
+      ['Шейпинг','SH','Постепенное построение поведения через маленькие приближения к цели.','Обучение','Karen Pryor'],
+      ['Критерий','CRIT','Наблюдаемое условие, по которому тренер решает, достаточно ли хорош текущий ответ.','Обучение','MOSTIK'],
+      ['Стимульный контроль','SD','Ситуация, когда поведение надёжно возникает в присутствии определённого сигнала и не возникает без него так же часто.','Стимулы','MOSTIK'],
+      ['Генерализация','GEN','Перенос навыка на другие места, людей и условия.','Навыки','MOSTIK'],
+      ['Дискриминация','DISC','Умение различать сигналы и выполнять поведение при нужном сигнале.','Стимулы','MOSTIK'],
+      ['Цепочка','CHAIN','Последовательность нескольких уже известных звеньев, выполняемых в установленном порядке.','Навыки','MOSTIK'],
+      ['Десенсибилизация','DS','Постепенное привыкание к стимулу с сохранением возможности спокойно отступить и продолжить позже.','Уход','MOSTIK']
+    ];
+    const cnt=await db.sql`SELECT count(*)::int n FROM glossary_terms WHERE user_id=${me.id}`;
+    if(Number(cnt[0]?.n||0)===0){
+      for(const d of defaults){
+        await db.sql`INSERT INTO glossary_terms(id,user_id,term,abbreviation,description,category,source) VALUES(${id()},${me.id},${d[0]},${d[1]},${d[2]},${d[3]},${d[4]}) ON CONFLICT(user_id,lower(term)) DO NOTHING`;
+      }
+    }
+    const rows=await db.sql`SELECT id,term,abbreviation,description,category,source,active,created_at,updated_at FROM glossary_terms WHERE user_id=${me.id} AND active=true ORDER BY lower(term)`;
+    return json({terms:rows});
+  }
+  if(p==='glossary' && req.method==='POST'){
+    const b=await parse(req);
+    const term=String(b.term||'').trim(), abbreviation=String(b.abbreviation||'').trim(), description=String(b.description||'').trim(), category=String(b.category||'Общее').trim()||'Общее', source=String(b.source||'').trim();
+    if(!term||!description)return json({error:'Укажите термин и описание'},400);
+    const existing=await db.sql`SELECT id FROM glossary_terms WHERE user_id=${me.id} AND lower(term)=lower(${term}) LIMIT 1`;
+    if(existing.length)return json({error:'Такой термин уже есть в вашем глоссарии'},409);
+    const gid=id();
+    await db.sql`INSERT INTO glossary_terms(id,user_id,term,abbreviation,description,category,source) VALUES(${gid},${me.id},${term},${abbreviation},${description},${category},${source})`;
+    return json({ok:true,id:gid},201);
+  }
+  const glossaryMatch=p.match(/^glossary\/([^/]+)$/);
+  if(glossaryMatch){
+    const gid=glossaryMatch[1];
+    const own=await db.sql`SELECT id FROM glossary_terms WHERE id=${gid} AND user_id=${me.id}`;
+    if(!own.length)return json({error:'Термин не найден'},404);
+    if(req.method==='PUT'){
+      const b=await parse(req);
+      const term=String(b.term||'').trim(), abbreviation=String(b.abbreviation||'').trim(), description=String(b.description||'').trim(), category=String(b.category||'Общее').trim()||'Общее', source=String(b.source||'').trim();
+      if(!term||!description)return json({error:'Укажите термин и описание'},400);
+      const dup=await db.sql`SELECT id FROM glossary_terms WHERE user_id=${me.id} AND lower(term)=lower(${term}) AND id<>${gid} LIMIT 1`;
+      if(dup.length)return json({error:'Такой термин уже есть в вашем глоссарии'},409);
+      await db.sql`UPDATE glossary_terms SET term=${term},abbreviation=${abbreviation},description=${description},category=${category},source=${source},updated_at=now() WHERE id=${gid} AND user_id=${me.id}`;
+      return json({ok:true});
+    }
+    if(req.method==='DELETE'){
+      await db.sql`UPDATE glossary_terms SET active=false,updated_at=now() WHERE id=${gid} AND user_id=${me.id}`;
+      return json({ok:true});
+    }
+  }
+
   // ========== SMART TEMPLATES / MOSTIK INSIDE FLEXIBLE DICTIONARY ==========
   if(p==='smart-dictionary' && req.method==='GET'){
     const u=new URL(req.url);

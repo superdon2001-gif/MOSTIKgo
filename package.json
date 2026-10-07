@@ -1,6 +1,6 @@
 {
   "name": "mostik",
-  "version": "5.3.27",
+  "version": "5.3.38",
   "private": true,
   "description": "MOSTIK: web app (Netlify Functions + Netlify Database; local mode with embedded PGlite)",
   "type": "module",

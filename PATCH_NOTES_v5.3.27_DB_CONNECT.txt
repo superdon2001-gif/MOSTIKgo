@@ -1,0 +1,21 @@
+MOSTIK v5.3.27 — CONNECT EXISTING DATABASE FIELDS
+No database migrations added or required.
+
+Connected existing migrations 043–047 to the application:
+- session welfare_goal, plan_note, summary_note, bridge_used
+- primary/secondary reinforcement
+- error_occurred, error_response, error_type, error_note
+- animal_reinforcers library API and session selection
+- animal profile: habitat_note, social_structure, diet_profile, prefers, avoids, human_experience
+- skill step: step_type and criterion_met
+- skill-step criterion update API
+
+UI:
+- animal profile exposes the existing Ramirez profile fields
+- training session includes goal and pre-session plan
+- completion form includes summary, bridge, reinforcers, error/reaction
+- reinforcer library can be selected directly in the session
+- skill steps show type and criterion-completed checkbox
+- skill creation supports step type and criterion-completed flag
+
+The migration runner was not changed and no new SQL migration was created.

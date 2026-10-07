@@ -1521,3 +1521,34 @@ input.field-invalid,select.field-invalid,textarea.field-invalid{
 .ui-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .mostik-toast{pointer-events:auto;cursor:pointer}
 .mostik-toast-warn{border-left:4px solid #d4a84b}
+
+/* v5.3.29 — human account profile */
+.account-avatar{width:42px;height:42px;min-width:42px;padding:0;border:1px solid var(--line);background:var(--soft);color:var(--ink);display:grid;place-items:center;overflow:hidden;box-shadow:none;border-radius:50%;cursor:pointer}
+.account-avatar:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.account-avatar img{width:100%;height:100%;object-fit:cover;display:block}.account-avatar span{font-weight:900;font-size:14px}
+:root[data-radius="none"] .account-avatar{border-radius:0}
+.profile-avatar-large{width:86px;height:86px;min-width:86px;font-size:24px}.profile-avatar-large span{font-size:25px}
+.profile-grid{align-items:stretch}.profile-card{min-width:0}.profile-identity{display:flex;align-items:center;gap:18px}.profile-identity h3{margin:0 0 4px}.profile-roles{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.profile-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}.profile-photo-btn{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;cursor:pointer}.profile-roles-list{display:grid;gap:7px;margin-bottom:12px}.profile-stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.profile-stats .stat-card{min-height:100px}.profile-top{align-items:center}
+@media(max-width:700px){.profile-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.profile-identity{align-items:flex-start}.profile-avatar-large{width:72px;height:72px;min-width:72px}}
+
+.profile-about{white-space:pre-wrap;line-height:1.6;min-height:72px}.profile-prof-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.profile-prof-block{border:1px solid var(--line);border-radius:14px;padding:16px}.table-wrap{overflow:auto}.profile-table{width:100%;border-collapse:collapse}.profile-table th,.profile-table td{text-align:left;padding:11px 10px;border-bottom:1px solid var(--line)}.profile-table th{font-size:12px;color:var(--muted)}.profile-table td small{display:block;color:var(--muted);margin-top:3px}@media(max-width:800px){.profile-prof-grid{grid-template-columns:1fr}.profile-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.chain-rows{display:grid;gap:10px}.chain-row{display:grid;grid-template-columns:28px 30px minmax(0,1fr) 40px;align-items:center;gap:8px;cursor:grab}.chain-row:active{cursor:grabbing}.chain-row.dragging{opacity:.45;border:2px dashed var(--accent)}.chain-drag{font-size:22px;text-align:center;color:var(--muted);cursor:grab}.chain-no{font-size:16px}.chain-fields{display:grid;grid-template-columns:1.5fr .5fr 1fr;gap:8px}.chain-fields label{display:grid;gap:4px}.chain-remove{min-width:36px;padding:8px!important}.chain-editor-help{margin:10px 0}@media(max-width:700px){.chain-row{grid-template-columns:24px 24px minmax(0,1fr) 36px}.chain-fields{grid-template-columns:1fr}.chain-row .chain-remove{align-self:start}}
+
+/* 5.3.38 — mobile editable glossary */
+.glossary-backdrop{padding:18px;z-index:1000}
+.glossary-modal{width:min(980px,100%);max-height:min(88vh,900px);display:flex;flex-direction:column;overflow:hidden}
+.glossary-head{flex:0 0 auto}
+.glossary-toolbar{display:grid;grid-template-columns:minmax(220px,1fr) 190px auto;gap:10px;align-items:center;margin:12px 0}
+.glossary-search{display:flex;align-items:center;gap:8px;margin:0}.glossary-search input{flex:1;margin:0}
+.glossary-body{overflow:auto;display:grid;gap:10px;padding-right:3px}
+.glossary-item{display:flex;gap:14px;justify-content:space-between;align-items:flex-start;border:1px solid var(--border);padding:14px;border-radius:var(--radius,12px);background:var(--card)}
+.glossary-item-main{min-width:0}.glossary-title-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.glossary-title-row h3{margin:0}.glossary-abbr{font-family:ui-monospace,monospace;font-size:.82rem;padding:3px 7px;border:1px solid var(--border);border-radius:8px}.glossary-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}.glossary-editor{width:min(680px,100%)}.glossary-editor textarea{width:100%;resize:vertical}
+@media(max-width:700px){
+ .glossary-backdrop,.glossary-editor-backdrop{padding:0;align-items:stretch;justify-content:stretch}
+ .glossary-modal,.glossary-editor{width:100%;height:100%;max-height:none;border-radius:0;padding:14px;overflow:hidden}
+ .glossary-toolbar{grid-template-columns:1fr;position:sticky;top:0;background:var(--card);padding-bottom:8px;z-index:2}
+ .glossary-toolbar button{width:100%}.glossary-search{width:100%}
+ .glossary-item{display:block;padding:12px}.glossary-actions{justify-content:stretch;margin-top:12px}.glossary-actions button{flex:1;min-height:42px}
+ .glossary-title-row h3{font-size:1.05rem}.glossary-head h2{font-size:1.2rem}
+ .glossary-body{padding-bottom:20px}
+}
