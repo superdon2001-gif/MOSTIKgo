@@ -521,7 +521,7 @@ function renderGuidance(c, actions){
 function healthBanner(){
  const a=state.animal, list=a?.health_features||[]; if(!list.length)return '';
  const critical=list.filter(x=>x.severity==='critical'), important=list.filter(x=>x.severity!=='info');
- return `<div class="health-banner ${critical.length?'critical':'calm'}" ${critical.length?'role="alert"':'role="region" aria-label="Особенности здоровья"'}><div class="health-banner-head"><div><span class="health-kicker"><span class="ui-emoji" aria-hidden="true">✚</span> ОСОБЕННОСТИ ЗДОРОВЬЯ</span><strong>${critical.length?'Требует особого внимания':'Важно учитывать в работе'}</strong></div><button type="button" class="secondary" id="openHealthFeatures">Подробнее</button></div><div class="health-chips">${list.map(x=>`<span class="health-chip ${x.severity==='critical'?'critical':x.severity==='important'?'important':''}"><b>${esc(x.title)}</b><small>${esc(healthSeverityLabel(x.severity))}</small></span>`).join('')}</div><div class="health-note">Эти сведения видят специалисты, у которых есть доступ к ${esc(a.name)}. Проверяйте предупреждения перед тренировкой, процедурой и наблюдением.</div></div>`;
+ return `<div class="health-banner ${critical.length?'critical':''}" role="alert"><div class="health-banner-head"><div><span class="health-kicker"><span class="ui-emoji" aria-hidden="true">✚</span> ОСОБЕННОСТИ ЗДОРОВЬЯ</span><strong>${critical.length?'Требует особого внимания':'Важно учитывать в работе'}</strong></div><button type="button" class="secondary" id="openHealthFeatures">Подробнее</button></div><div class="health-chips">${list.map(x=>`<span class="health-chip ${x.severity==='critical'?'critical':x.severity==='important'?'important':''}"><b>${esc(x.title)}</b><small>${esc(healthSeverityLabel(x.severity))}</small></span>`).join('')}</div><div class="health-note">Эти сведения видят специалисты, у которых есть доступ к ${esc(a.name)}. Проверяйте предупреждения перед тренировкой, процедурой и наблюдением.</div></div>`;
 }
 function render(){
  applySettings();
@@ -533,13 +533,11 @@ function render(){
    +'<button data-view="care">Забота</button>'
    +'<button data-view="vet">Ветеринария</button>'
    +'<button data-view="training">Тренировка</button>'
-   +'<button type="button" id="navMoreBtn" class="nav-more-btn" aria-haspopup="true" aria-expanded="false">Ещё ▾</button>'
-   +'<div id="navMoreMenu" class="nav-more-menu" hidden>'
    +'<button data-view="analytics">Аналитика</button>'
    +'<button data-view="calendar">Календарь</button>'
    +'<button data-view="settings">Настройки</button>'
-   +'</div>';
- app.innerHTML=`<aside><img src="${currentLogoSrc()}" class="side-logo" alt="MOSTIK"><b>MOSTIK</b>${nav}</aside><main class="main"><header><div><span class="muted">${esc(roleName(r))}</span><h1>${esc(state.user.display_name)}</h1></div><div class="header-controls"><button type="button" class="secondary header-cmdk" id="openCmdPalette" title="Ctrl/Cmd+K">⌕</button><button type="button" class="secondary header-logout" id="logoutHeaderBtn" title="Выйти из аккаунта">Выйти</button>${state.animals.length?`<label class="animal-switcher"><span class="muted">Животное</span><select id="animal"><option value="__ALL__" ${!state.animal?'selected':''}>Все животные</option>${state.animals.map(a=>`<option value="${esc(a.id)}" ${state.animal?.id===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select></label>`:''}<button type="button" class="secondary header-journal-btn" id="openJournal" title="Журнал событий">Журнал</button>${(()=>{const real=[...new Set([...userRoles(),state.user.role].filter(Boolean))];const opts=real.map(x=>`<option value="${x}" ${x===r?'selected':''}>${roleName(x)}</option>`);return (real.length>1||state.user.role==='admin')?`<label class="role-switcher"><span class="muted">Роль</span><select id="activeRole">${opts.join('')}</select></label>`:''})()}</div></header>${healthBanner()}<section id="content"></section></main>`;
+   +'<button id="logoutNavBtn" class="more-nav-btn danger">Выйти</button>';
+ app.innerHTML=`<aside><img src="${currentLogoSrc()}" class="side-logo" alt="MOSTIK"><b>MOSTIK</b>${nav}</aside><main class="main"><header><div><span class="muted">${esc(roleName(r))}</span><h1>${esc(state.user.display_name)}</h1></div><div class="header-controls"><button type="button" class="secondary header-cmdk" id="openCmdPalette" title="Ctrl/Cmd+K">⌕</button>${state.animals.length?`<label class="animal-switcher"><span class="muted">Животное</span><select id="animal"><option value="__ALL__" ${!state.animal?'selected':''}>Все животные</option>${state.animals.map(a=>`<option value="${esc(a.id)}" ${state.animal?.id===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select></label>`:''}<button type="button" class="secondary header-journal-btn" id="openJournal" title="Журнал событий">Журнал</button>${(()=>{const real=[...new Set([...userRoles(),state.user.role].filter(Boolean))];const opts=real.map(x=>`<option value="${x}" ${x===r?'selected':''}>${roleName(x)}</option>`);return (real.length>1||state.user.role==='admin')?`<label class="role-switcher"><span class="muted">Роль</span><select id="activeRole">${opts.join('')}</select></label>`:''})()}</div></header>${healthBanner()}<section id="content"></section></main>`;
  bindShell();view(defaultViewForRole());
  setTimeout(()=>enhanceSmartFields(document),120);
  setTimeout(()=>maybeStartOnboarding(),180);
@@ -633,7 +631,6 @@ function settings(c){
  const role=currentRole();
  const s={scheme:ROLE_THEME_DEFAULTS[role]||'classic',mode:'auto',radius:'none',default_animal:'',date_format:'DD.MM.YYYY',hints:'yes',session_length:'12h',access_mode:'lan',...getSettings()};
  c.innerHTML=`<div class="top"><div><h2>Настройки</h2><p class="muted">Оформление можно менять сразу. Подборки тем адаптированы под роль, но любую тему можно выбрать вручную.</p></div></div>
- <div class="card settings-card settings-account-card"><div><h3>Аккаунт</h3><p class="muted">${esc(state.user.display_name||'')}</p></div><button type="button" class="secondary" id="settingsLogout">Выйти из аккаунта</button></div>
  <div class="card theme-role-banner"><strong>Роль: ${esc(roleName(role))}</strong><span class="muted">Рекомендуемая тема: ${esc(SETTINGS_THEMES[ROLE_THEME_DEFAULTS[role]]||SETTINGS_THEMES.classic)}</span></div>
  
  <div class="card settings-card settings-tools-card"><h3>Инструменты</h3><p class="muted">Разделы, которые раньше были в главном меню.</p>
@@ -1405,25 +1402,7 @@ function bindShell(){
  if(nav){
   nav.onclick=null;
   nav.querySelectorAll('[data-view]').forEach(b=>{b.onclick=e=>{e.preventDefault();e.stopPropagation();view(b.dataset.view);return false}});
-  document.querySelector('#logoutHeaderBtn')?.addEventListener('click',doLogout);
-  if(!window.__uiDelegatesBound){window.__uiDelegatesBound=true;
-    document.addEventListener('change',e=>{
-      const pick=e.target.closest?.('#overviewAnimalPick'); if(!pick||pick.value==='__ALL__')return;
-      const sw=document.querySelector('#animal'); if(!sw)return;
-      sw.value=pick.value; sw.dispatchEvent(new Event('change',{bubbles:true}));
-    });
-    document.addEventListener('click',e=>{if(e.target.closest?.('#settingsLogout'))doLogout(e)});
-  }
-  const moreBtn=document.querySelector('#navMoreBtn'), moreMenu=document.querySelector('#navMoreMenu');
-  if(moreBtn&&moreMenu){
-    const setOpen=o=>{moreMenu.hidden=!o;moreBtn.setAttribute('aria-expanded',o?'true':'false')};
-    moreBtn.onclick=e=>{e.preventDefault();e.stopPropagation();setOpen(moreMenu.hidden)};
-    if(!window.__navMoreBound){window.__navMoreBound=true;
-      const close=()=>{const m=document.querySelector('#navMoreMenu');if(m&&!m.hidden){m.hidden=true;document.querySelector('#navMoreBtn')?.setAttribute('aria-expanded','false')}};
-      document.addEventListener('click',e=>{if(!e.target.closest('#navMoreMenu,#navMoreBtn'))close()});
-      document.addEventListener('keydown',e=>{if(e.key==='Escape')close()});
-    }
-  }
+  document.querySelector('#logoutNavBtn')?.addEventListener('click',doLogout);
  }
  document.querySelectorAll('[data-quick]').forEach(b=>b.onclick=()=>quick(b.dataset.quick));
  document.querySelector('#logout')?.addEventListener('click',doLogout);
@@ -1492,15 +1471,11 @@ function viewUnsafe(v){
  const homeViews=['home','animals','journal'];
  let active=v==='home'?'home':v;
  if(careViews.includes(v)) active='care';
- if(homeViews.includes(v)) active=v==='home'?'home':'';
+ if(homeViews.includes(v)) active='home';
  document.querySelectorAll('aside [data-view]').forEach(b=>{
    b.classList.remove('active');
-   if(active&&b.dataset.view===active) b.classList.add('active');
+   if(b.dataset.view===active) b.classList.add('active');
  });
- document.querySelector('#navMoreBtn')?.classList.toggle('active',['analytics','calendar','settings'].includes(active));
- const jb=document.querySelector('#openJournal');
- if(jb){jb.classList.toggle('active',v==='journal'); if(v==='journal')jb.setAttribute('aria-current','page'); else jb.removeAttribute('aria-current')}
- document.querySelector('.animal-switcher')?.classList.toggle('active',v==='animals');
  const c=document.querySelector('#content');
  if(v==='home')home(c);
  if(v==='animals')animals(c);
@@ -1754,7 +1729,7 @@ function home(c){
  const homeSeq=++state.homeRenderSeq;
  if(isAllAnimals()){
   const b=localDayBounds();
-  c.innerHTML=(typeof homeHubBar==='function'?homeHubBar():'')+`<div class="top overview-head"><div><h2>Сегодня · все животные</h2><p class="muted">Сводка и события по всем животным, к которым у вас есть доступ.</p></div><div class="overview-count">${state.animals.length} животных</div></div>${scopeToolbar()}<div class="card today-tip today-tip-pick"><div><b>Режим «Все животные»</b><span>Действия, которые требуют конкретного животного, доступны после его выбора.</span></div><label class="inline-animal-pick"><span class="muted">Выбрать животное</span><select id="overviewAnimalPick" aria-label="Выбрать животное"><option value="__ALL__" selected>Все животные</option>${state.animals.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}</select></label></div><div id="todayAll"><p class="muted">Загружаю события…</p></div>`;
+  c.innerHTML=(typeof homeHubBar==='function'?homeHubBar():'')+`<div class="top overview-head"><div><h2>Сегодня · все животные</h2><p class="muted">Сводка и события по всем животным, к которым у вас есть доступ.</p></div><div class="overview-count">${state.animals.length} животных</div></div>${scopeToolbar()}<div class="card today-tip"><b>Режим «Все животные»</b><span>Действия, которые требуют конкретного животного, доступны после его выбора в списке справа сверху.</span></div><div id="todayAll"><p class="muted">Загружаю события…</p></div>`;
   document.querySelector('#scopeSort')?.addEventListener('change',e=>{state.scopeSort=e.target.value;home(c)});
   Promise.all(state.animals.map(async a=>{try{return {...(await api(`today?animal_id=${encodeURIComponent(a.id)}&from=${encodeURIComponent(b.from)}&to=${encodeURIComponent(b.to)}`)),animal:a}}catch{return {sessions:[],observations:[],food:[],vet:[],homework:[],animal:a,failed:true}}})).then(all=>{
     let animals=all.map(x=>x.animal); const m=state.scopeSort||'date_desc';
@@ -1780,7 +1755,7 @@ function home(c){
  }
  if(!state.animal){c.innerHTML=(typeof homeHubBar==='function'?homeHubBar():'')+`<div class="card empty-state empty-hero"><div class="empty-icon" aria-hidden="true">🐾</div><h2>Добро пожаловать в MOSTIK</h2><p class="muted">Здесь будет сводка по задачам, лекарствам, тренировкам и событиям выбранного животного.</p><ul class="empty-preview muted"><li>Сегодняшние дела и напоминания</li><li>Быстрые действия: еда, наблюдение, календарь</li><li>Статус здоровья и навыки</li></ul><div class="empty-actions"><button type="button" class="primary" id="homeGoAnimals">＋ Добавить или выбрать животное</button></div></div>`;document.querySelector('#homeGoAnimals')?.addEventListener('click',()=>view('animals'));return}
  const a=state.animal,b=localDayBounds(),att=a.attention||[],dev=a.development_features||[],mastered=state.skills.filter(s=>s.mastered).length;
- c.innerHTML=`<div class="dashboard-hero"><div class="animal-hero-icon">${photoMarkup(a,'animal-hero-photo')}</div><div><span class="muted">${esc(b.label)}</span><h2>${esc(a.name)}</h2><p class="muted">${esc(a.species||'')} ${a.breed?'· '+esc(a.breed):''}</p><div class="animal-status-pill ${animalStatusClass(a.status)}">${animalStatusIcon(a.status)} ${esc(animalStatusLabel(a.status))}</div>${att.length?`<div class="chips hero-attention">${att.map(x=>`<span>${esc(x.title)}</span>`).join('')}</div>`:''}</div></div>${quickActions()}
+ c.innerHTML=`<div class="dashboard-hero"><div class="animal-hero-icon">${photoMarkup(a,'animal-hero-photo')}</div><div><span class="muted">${esc(b.label)}</span><h2>${esc(a.name)}</h2><p class="muted">${esc(a.species||'')} ${a.breed?'· '+esc(a.breed):''}</p><div class="animal-status-pill ${animalStatusClass(a.status)}">${animalStatusIcon(a.status)} ${esc(animalStatusLabel(a.status))}</div></div></div>${att.length?`<div class="attention dashboard-attention"><b>⚠ Требует внимания</b><div class="chips">${att.map(x=>`<span>${esc(x.title)}</span>`).join('')}</div></div>`:''}${quickActions()}
 <div id="ownerTodayPanel" class="card owner-today"><p class="muted">Загружаю сводку…</p></div>
 <div class="grid dashboard-stats"><div class="card stat-card stat-card-animals"><span class="muted">Доступные животные</span><strong>${state.animals.length}</strong><div class="stat-card-actions"><button type="button" class="secondary" id="goAllAnimals">Все животные</button><button type="button" class="secondary" id="goAnimalsList">Список</button></div></div><div class="card stat-card"><span class="muted">Навыки освоены</span><strong>${mastered}/${state.skills.length||0}</strong></div><div class="card stat-card"><span class="muted">Особенности</span><strong>${dev.length}</strong></div></div><div class="card today-tip"><b>${({owner:'Ваш день с питомцем',trainer:'Фокус: тренировки и ДЗ',keeper:'Фокус: рацион и наблюдения',vet:'Фокус: здоровье и назначения',admin:'Обзор системы'}[state.user.effective_role]||'Сегодня')}</b><span>${({owner:'Быстрые действия: еда, домашние задания и календарь.',trainer:'Начните сессию, задайте ДЗ или откройте навыки.',keeper:'Запишите рацион, наблюдение или откройте календарь.',vet:'Добавьте запись, анализы или проверьте препараты.',admin:'Полный доступ ко всем разделам.'}[state.user.effective_role]||'Последние значения подставляются автоматически.')}</span></div><div class="grid dashboard-two"><div class="card"><div class="top"><h3>Особенности развития и поведения</h3><button type="button" class="secondary" id="homeDev">Открыть</button></div>${dev.length?`<div class="chips">${dev.slice(0,8).map(x=>`<span>${esc(x.category)}: ${esc(x.title)} · ${esc(developmentFeatureLabel(x.status))}</span>`).join('')}</div>`:'<p class="muted">Особенности не зафиксированы.</p>'}</div><div class="card"><h3>Навыки</h3>${state.skills.length?`<div class="skill-summary">${state.skills.map(s=>`<div class="summary-row"><span>${esc(s.name)}</span><span class="badge ${s.mastered?'ok':'pending'}">${s.mastered?'Освоен':'В работе'}</span></div>`).join('')}</div>`:'<p class="muted">Навыки ещё не добавлены.</p>'}</div></div><div id="todayList"><div class="card muted">Загружаю события…</div></div>`;
  document.querySelector('#homeDev')?.addEventListener('click',()=>developmentFeatures(c)); document.querySelectorAll('[data-quick]').forEach(x=>x.onclick=()=>quick(x.dataset.quick));

@@ -1,0 +1,19 @@
+MOSTIK v5.2.5 — reliable animal avatar icons
+
+- Replaced previous animal icon set with 12 new high-quality line-art icons
+  (dog, raccoon, seal, monkey, elephant, cat, hedgehog, fox, etc.).
+- Icons are embedded as base64 WebP data-URIs inside app.js so they can never
+  "fall off" due to SPA redirects, missing static files, or SW cache misses
+  (same reliability approach used earlier for the logo).
+- File copies still live at /assets/animal-icons/icon-1.webp … icon-12.webp
+  and are pre-cached by the Service Worker (cache bumped to mostik-v5.2.5-cache).
+- When creating an animal the user can now:
+    • choose one of the 12 icons, OR
+    • upload their own photo, OR
+    • leave both empty → backend assigns a random icon (1–12).
+- Profile / cards / hero always show photo_data if present, otherwise the
+  selected (or deterministically derived) avatar icon.
+- Backend animal create accepts avatar_icon '1'..'12'; invalid/missing values
+  get a random icon in that range.
+- DB migration 028_animal_avatar_icons_v2.sql normalizes any out-of-range
+  avatar_icon values to 1..12.

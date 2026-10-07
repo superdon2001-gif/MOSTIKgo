@@ -1,0 +1,10 @@
+MOSTIK v5.2.7 — classic logo + no logo invert + dark mode fix
+
+- Added standard theme «Классика» with the official navy/cream MOSTIK logo.
+- Classic is the default for admin and owner (and global fallback).
+- Thematic logos are NEVER inverted in dark/auto/light modes
+  (removed legacy filter:invert(1) !important and --logo-filter invert).
+- Fixed dark mode surfaces: theme light palettes no longer override dark
+  mode (dark rules now win via cascade + !important after theme blocks).
+- Auto mode follows OS preference with the same dark surfaces.
+- SW cache: mostik-v5.2.7-cache.

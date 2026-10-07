@@ -1,0 +1,17 @@
+MOSTIK v5.2.12 — database error fix
+
+Root cause (most likely):
+- API started reading/writing animals.avatar_icon and join-by-id on animal_access,
+  but production DB may not have had migrations 026–028 applied yet
+  → Postgres error "column avatar_icon does not exist" (shows up as "database error").
+
+Fix:
+- API now runs ensureSchema() on each cold start (idempotent):
+  • ALTER TABLE animals ADD COLUMN IF NOT EXISTS avatar_icon
+  • default + null fill
+  • unique index on animal_access(user_id, animal_id)
+- animals/access INSERT hardened with fallback if ON CONFLICT target is missing
+- Migration 029_schema_repair_avatar_access.sql for manual/ops apply
+- No frontend feature changes
+
+If error persists after deploy: open Netlify → Functions logs and check the exact SQL message.

@@ -1,0 +1,27 @@
+MOSTIK v5.3.5 — role switch / owner analytics / header cleanup
+
+Base: MOSTIK-final-patch-v5.3.4
+
+FIXES
+1. Real multi-role switcher is now shown for ANY user with more than one assigned real role, including owner.
+   - No special admin-only condition.
+   - Only roles actually assigned to the user are shown.
+   - Active role is persisted through sessions_auth.active_role.
+2. Removed administrator demo-role mode completely from the UI and API path.
+   - No "Кипер — демо" option.
+   - No demo-role bar.
+   - No demo-role buttons in Settings/Admin UI.
+3. Removed the large animal context panel directly under the header.
+   - The compact animal selector in the header remains.
+4. Owner analytics remains available in the owner navigation and analytics view.
+   - Analytics loading is now resilient: if one optional data source fails, the analytics screen still renders using the other available sources instead of becoming blank.
+5. Real role switching no longer depends on demo_role state.
+
+CHANGED FILES
+- public/app.js
+- netlify/functions/api.mjs
+- PATCH_NOTES_v5.3.5.txt
+
+CHECKS
+- node --check public/app.js: PASS
+- node --check netlify/functions/api.mjs: PASS

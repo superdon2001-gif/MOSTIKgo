@@ -1,0 +1,12 @@
+MOSTIK v5.2.11 — configurable corner radius
+
+- Settings → Оформление → «Скругление элементов»:
+  • Без скругления — современно (0px) — default
+  • Небольшое — 6px
+  • Среднее — 12px
+  • Крупное — 18px
+- Applies live to cards, buttons, inputs, modals, tabs, chips, status pills.
+- Logos and animal avatars stay circular.
+- Mini preview under the selector shows card/button/chip samples.
+- Stored in mostik_settings.radius; applied via data-radius + CSS variables.
+- SW cache: mostik-v5.2.11-cache.

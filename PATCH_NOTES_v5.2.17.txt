@@ -1,0 +1,16 @@
+MOSTIK v5.2.17 — simplify complex flows
+
+1) Add animal
+- First step: two large choices «Новое животное» / «У меня есть ID»
+- Create form (icons etc.) only after choosing create
+
+2) Calendar
+- Single «+ Добавить» button
+- Chooser: Тренировка / Врач / Груминг / Напоминание
+- Reminder opens reminders flow; others open schedule modal with type
+
+3) Food
+- Badge «Из плана: Утро» when active plan meal is applied
+- If no plan: link «Составить план» → food plan tab
+
+SW: mostik-v5.2.17-cache

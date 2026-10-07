@@ -12,8 +12,7 @@ Analytics dashboard upgrade based on v4.4.24.
 
 
 ## MOSTIK 5.0
-Unified workspace (current navigation, v5.3.28): Главная, Забота, Ветеринария, Тренировка, Аналитика, Календарь, Настройки, Выйти; «Журнал» — кнопка в шапке, «Все животные» — карточка на главной, «Рацион» и «Обогащение среды» — вкладки внутри «Заботы»; global animal context and journal across accessible animals.
-(Меню «Ещё» и отдельный раздел «Питание» из прежних версий убраны; упоминания в старых CHANGELOG/PATCH_NOTES — историческая справка.)
+Unified workspace: Главная, Животные, Журнал, Тренировка, Ветеринария, Аналитика, Календарь and «Ещё»; global animal context and journal across accessible animals.
 
 ## v5.0.2
 

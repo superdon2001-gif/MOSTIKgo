@@ -130,9 +130,9 @@ window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;});
 async function installMostik(){
  if(deferredInstallPrompt){deferredInstallPrompt.prompt();try{await deferredInstallPrompt.userChoice}catch{}deferredInstallPrompt=null;return true}
  const ua=navigator.userAgent.toLowerCase();
- if(ua.includes('firefox')) alert('В Firefox автоматическое окно установки может быть недоступно. Откройте меню браузера и выберите «Установить» или «Добавить на главный экран».');
- else if(ua.includes('yabrowser')) alert('В Яндекс Браузере откройте меню браузера и выберите «Добавить на главный экран» или «Установить приложение».');
- else alert('Откройте меню браузера и выберите «Установить приложение» или «Добавить на главный экран».');
+ if(ua.includes('firefox')) uiAlert('В Firefox автоматическое окно установки может быть недоступно. Откройте меню браузера и выберите «Установить» или «Добавить на главный экран».',{title:'Установка приложения'});
+ else if(ua.includes('yabrowser')) uiAlert('В Яндекс Браузере откройте меню браузера и выберите «Добавить на главный экран» или «Установить приложение».',{title:'Установка приложения'});
+ else uiAlert('Откройте меню браузера и выберите «Установить приложение» или «Добавить на главный экран».',{title:'Установка приложения'});
  return false;
 }
 if('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
@@ -140,20 +140,140 @@ if('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.se
 let state={homeRenderSeq:0,scopeSort:'date_desc',user:null,animals:[],animal:null,animalCatalog:[],skills:[],selected:[],timer:null,started:null,seconds:0,authMode:'login',adminUsers:[],grants:[],roles:[],activeRole:null,homework:[],vet:[],observations:[],food:[],today:null,repeat:null,repeatTraining:null,defaults:null,reminders:[],dueReminders:[],insight:null,allOverview:[]};
 const apiCache=new Map(),apiPending=new Map();
 
+/* ---------- v5.3.27: встроенные окна вместо alert / confirm / prompt ---------- */
 function toast(msg, kind='ok'){
+  if(kind==='error') kind='err';
   let host=document.querySelector('#mostikToasts');
   if(!host){
     host=document.createElement('div');
     host.id='mostikToasts';
     host.className='mostik-toasts';
+    host.setAttribute('aria-live','polite');
     document.body.appendChild(host);
   }
   const el=document.createElement('div');
   el.className=`mostik-toast mostik-toast-${kind}`;
+  el.setAttribute('role',kind==='err'?'alert':'status');
   el.textContent=msg;
   host.appendChild(el);
   requestAnimationFrame(()=>el.classList.add('show'));
-  setTimeout(()=>{el.classList.remove('show'); setTimeout(()=>el.remove(),300)},2600);
+  // Длинные сообщения и ошибки держим дольше; клик закрывает сразу.
+  const ms=Math.min(10000,Math.max(kind==='err'?5000:2600,1800+String(msg).length*55));
+  const hide=()=>{el.classList.remove('show'); setTimeout(()=>el.remove(),300)};
+  el.addEventListener('click',hide);
+  setTimeout(hide,ms);
+}
+function uiNotify(msg,kind='warn'){ try{ toast(String(msg??''),kind) }catch(e){ console.warn(msg) } }
+function uiToday(){ const d=new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,10) }
+/**
+ * Универсальное окно. Возвращает Promise:
+ *  - форма/prompt: объект {имя_поля: строка} или null при отмене;
+ *  - confirm: объект (да) или null (нет); alert: true.
+ * fields: [{name,label,type:'text|number|date|textarea|select|radio',value,options:[[v,label]],required,hint,min,max}]
+ */
+function uiOpenDialog(o){
+ return new Promise(resolve=>{
+  const {title='',message='',fields=[],submit='Готово',cancel='Отмена',danger=false,alertOnly=false,copy=null,validate=null}=o||{};
+  const prev=document.activeElement, id='uiDlg'+Math.random().toString(36).slice(2,8);
+  const hadOpen=document.body.classList.contains('modal-open');
+  const wrap=document.createElement('div'); wrap.className='modal-backdrop ui-dialog';
+  const fieldHtml=f=>{
+    const nm=esc(f.name), lab=f.label?`<span>${esc(f.label)}</span>`:'', aria=f.label?'':` aria-label="${esc(f.aria||title)}"`;
+    const hint=f.hint?`<small class="muted">${esc(f.hint)}</small>`:'';
+    const val=String(f.value??'');
+    if(f.type==='radio') return `<fieldset class="ui-radio-group"><legend class="ui-sr">${esc(f.label||title)}</legend>${(f.options||[]).map(([v,l])=>`<label class="ui-radio"><input type="radio" name="${nm}" value="${esc(v)}" ${String(v)===val?'checked':''}> <span>${esc(l)}</span></label>`).join('')}${hint}</fieldset>`;
+    if(f.type==='select') return `<label>${lab}<select name="${nm}"${aria}>${(f.options||[]).map(([v,l])=>`<option value="${esc(v)}" ${String(v)===val?'selected':''}>${esc(l)}</option>`).join('')}</select>${hint}</label>`;
+    if(f.type==='textarea') return `<label>${lab}<textarea name="${nm}" rows="3"${aria} placeholder="${esc(f.placeholder||'')}">${esc(val)}</textarea>${hint}</label>`;
+    const attrs=['min','max','step'].filter(k=>f[k]!==undefined).map(k=>` ${k}="${esc(f[k])}"`).join('');
+    return `<label>${lab}<input name="${nm}" type="${esc(f.type||'text')}" value="${esc(val)}" placeholder="${esc(f.placeholder||'')}" autocomplete="off"${attrs}${aria}>${hint}</label>`;
+  };
+  wrap.innerHTML=`<form class="modal-card modal-form ui-dialog-card" role="${alertOnly||danger?'alertdialog':'dialog'}" aria-modal="true" aria-labelledby="${id}t" novalidate>`
+   +`<h3 id="${id}t">${esc(title)}</h3>`
+   +(message?`<p class="ui-dialog-msg">${esc(message)}</p>`:'')
+   +fields.map(fieldHtml).join('')
+   +`<p class="error ui-dialog-err" role="alert" hidden></p>`
+   +`<div class="modal-actions">`
+   +(alertOnly?'':`<button type="button" class="secondary" data-ui-cancel>${esc(cancel)}</button>`)
+   +(copy?`<button type="button" class="secondary" data-ui-copy>Скопировать код</button>`:'')
+   +`<button type="submit" class="${danger?'danger':''}" data-ui-ok>${esc(submit)}</button></div></form>`;
+  const card=wrap.querySelector('form'), errEl=wrap.querySelector('.ui-dialog-err');
+  let done=false;
+  const persistent=!!copy;                       // окно с кодом восстановления нельзя закрыть случайно
+  const close=val=>{
+    if(done) return; done=true;
+    document.removeEventListener('keydown',onKey,true);
+    wrap.remove(); if(!hadOpen) document.body.classList.remove('modal-open');
+    try{ prev?.focus?.() }catch(e){}
+    resolve(val);
+  };
+  const el=n=>card.querySelector(`[name="${n}"]`);
+  const showErr=(t,target)=>{ errEl.textContent=t; errEl.hidden=false; try{ target?.focus() }catch(e){} };
+  card.addEventListener('submit',e=>{
+    e.preventDefault();
+    if(alertOnly){ close(true); return; }
+    const fd=new FormData(card), v={};
+    fields.forEach(f=>{ const x=fd.get(f.name); v[f.name]=x==null?'':String(x).trim(); });
+    for(const f of fields){
+      const x=v[f.name], name=f.label||f.aria||title;
+      if(f.required && !x){ showErr('Заполните поле «'+name+'»',el(f.name)); return; }
+      if(x && f.type==='number'){
+        const n=Number(x);
+        if(!Number.isFinite(n)){ showErr('«'+name+'»: введите число',el(f.name)); return; }
+        if(f.min!==undefined && n<Number(f.min)){ showErr('«'+name+'»: не меньше '+f.min,el(f.name)); return; }
+        if(f.max!==undefined && n>Number(f.max)){ showErr('«'+name+'»: не больше '+f.max,el(f.name)); return; }
+      }
+    }
+    const bad=validate?validate(v):null;
+    if(bad){ showErr(bad); return; }
+    close(v);
+  });
+  card.querySelector('[data-ui-cancel]')?.addEventListener('click',()=>close(null));
+  const copyBtn=card.querySelector('[data-ui-copy]');
+  if(copyBtn) copyBtn.addEventListener('click',async()=>{ const ok=await copyText(String(copy)); copyBtn.textContent=ok?'Скопировано':'Не удалось скопировать'; });
+  if(!persistent && !fields.length) wrap.addEventListener('mousedown',e=>{ if(e.target===wrap) close(alertOnly?true:null); });
+  function onKey(e){
+    const tops=document.querySelectorAll('.ui-dialog'); if(tops[tops.length-1]!==wrap) return;
+    if(e.key==='Escape' && !persistent){ e.preventDefault(); e.stopPropagation(); close(alertOnly?true:null); return; }
+    if(e.key==='Tab'){
+      const f=[...card.querySelectorAll('input,select,textarea,button')].filter(x=>!x.disabled);
+      if(!f.length) return;
+      const first=f[0], last=f[f.length-1], cur=document.activeElement;
+      if(!card.contains(cur)){ e.preventDefault(); first.focus(); }
+      else if(e.shiftKey && cur===first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && cur===last){ e.preventDefault(); first.focus(); }
+    }
+  }
+  document.addEventListener('keydown',onKey,true);
+  document.body.appendChild(wrap); document.body.classList.add('modal-open');
+  const firstField=card.querySelector('input:checked, input:not([type=radio]), select, textarea');
+  const target=fields.length?firstField:(danger?card.querySelector('[data-ui-cancel]'):card.querySelector('[data-ui-ok]'));
+  try{ (target||card.querySelector('[data-ui-ok]')).focus(); if(target && target.select && target.type!=='date' && target.type!=='number') target.select(); }catch(e){}
+ });
+}
+const uiForm=o=>uiOpenDialog(o);
+/** Как prompt(): строка или null при отмене. */
+async function uiPrompt(title,o={}){
+ const r=await uiOpenDialog({title,message:o.message||'',submit:o.submit||'Готово',fields:[{name:'value',label:o.label||'',aria:title,type:o.multiline?'textarea':(o.type||'text'),value:o.value,required:!!o.required,hint:o.hint,min:o.min,max:o.max,placeholder:o.placeholder}]});
+ return r?r.value:null;
+}
+/** Выбор одного варианта: options=[[значение,подпись],…]; до 4 вариантов — радиокнопки, больше — список. */
+async function uiChoice(title,options,value,o={}){
+ const r=await uiOpenDialog({title,message:o.message||'',submit:o.submit||'Выбрать',fields:[{name:'value',type:options.length<=4?'radio':'select',options,value,aria:title}]});
+ return r?r.value:null;
+}
+/** Как confirm(): true/false. Заголовок — первое предложение, остальное — пояснение; подпись кнопки — по глаголу. */
+async function uiConfirm(message,o={}){
+ const m=String(message??'').trim();
+ const i=m.search(/[?\n]/), cut=i<0?m.length:(m[i]==='?'?i+1:i);
+ const title=m.slice(0,cut).trim()||m, rest=m.slice(cut).trim();
+ const verb=(m.match(/^(Удалить|Убрать|Сбросить|Выйти|Отметить|Скопировать|Импортировать|Создать)/)||[])[1];
+ const danger=o.danger??/^(Удалить|Убрать|Сбросить)/.test(m);
+ const r=await uiOpenDialog({title,message:rest,submit:o.submit||verb||'Подтвердить',danger});
+ return r!==null;
+}
+/** Как alert(), но не блокирует страницу; для инструкций и данных, которые нельзя потерять. */
+function uiAlert(message,o={}){
+ return uiOpenDialog({title:o.title||'Сообщение',message:String(message??''),alertOnly:true,submit:o.submit||'Понятно',copy:o.copy||null}).then(()=>true);
 }
 function friendlyError(msg, status){
   const m=String(msg||'');
@@ -272,7 +392,7 @@ async function smartEnhanceForm(form){
     try{toast('Шаблон применён','ok')}catch{};
   };
   bar.querySelector('.smart-save-template').onclick=async()=>{
-    const name=prompt('Название шаблона');
+    const name=(await uiPrompt('Название шаблона',{required:true,submit:'Сохранить'}));
     if(!name?.trim())return;
     const payload={};
     // Save all named fields on the form (not only SMART_FIELD_MAP), so шаблон реально заполняет форму
@@ -282,7 +402,7 @@ async function smartEnhanceForm(form){
       else if(el.type==='radio'){ if(el.checked) payload[el.name]=el.value; }
       else if(el.value!=null && String(el.value).trim()!=='') payload[el.name]=el.value;
     }
-    if(!Object.keys(payload).length){ try{toast('Заполните хотя бы одно поле формы','warn')}catch{alert('Заполните поля')}; return; }
+    if(!Object.keys(payload).length){ try{toast('Заполните хотя бы одно поле формы','warn')}catch{uiNotify('Заполните поля','warn')}; return; }
     try{
       await api('smart-templates',{method:'POST',body:JSON.stringify({section,name:name.trim(),description:`Шаблон ${section}`,species:smartSpecies()||null,payload,visibility:'personal'})});
       try{toast('Шаблон сохранён','ok')}catch{};
@@ -296,7 +416,7 @@ async function smartEnhanceForm(form){
         o.dataset.payload=pl;
         sel.appendChild(o);
       });
-    }catch(e){ try{toast(e.message||'Не удалось сохранить шаблон','warn')}catch{alert(e.message)} }
+    }catch(e){ try{toast(e.message||'Не удалось сохранить шаблон','warn')}catch{uiNotify(e.message,'err')} }
   };
   for(const el of els){
     el.dataset.smartField=el.name;
@@ -306,19 +426,19 @@ async function smartEnhanceForm(form){
       const refill=async()=>{dl.innerHTML='';const seen=new Set();const add=v=>{const x=String(v||'').trim();if(!x||seen.has(x.toLocaleLowerCase('ru-RU')))return;seen.add(x.toLocaleLowerCase('ru-RU'));const o=document.createElement('option');o.value=x;dl.appendChild(o)};try{(await smartLoad(el)).forEach(v=>add(v.value_text))}catch{};if(el.name==='species'){(state.animalCatalog||[]).forEach(v=>add(v.species))}if(el.name==='subspecies'){const sp=smartSpecies().toLocaleLowerCase('ru-RU');(state.animalCatalog||[]).filter(v=>String(v.species||'').toLocaleLowerCase('ru-RU')===sp).flatMap(v=>v.subspecies||[]).forEach(add)}};
       await refill();
       const other=document.createElement('button');other.type='button';other.className='secondary smart-other';other.textContent='Другое…';other.style.marginTop='6px';el.parentNode?.appendChild(other);
-      other.onclick=()=>{const v=prompt(`Введите свой вариант для «${el.name}»`);if(v?.trim()){el.value=v.trim();smartRemember(el,v);el.dispatchEvent(new Event('change',{bubbles:true}))}};
+      other.onclick=async ()=>{const v=(await uiPrompt(`Введите свой вариант для «${el.name}»`,{required:true}));if(v?.trim()){el.value=v.trim();smartRemember(el,v);el.dispatchEvent(new Event('change',{bubbles:true}))}};
       el.addEventListener('focus',()=>refill());el.addEventListener('input',()=>{if(el.value.length>=1)refill()});el.addEventListener('change',()=>{smartRemember(el,el.value);refill()});
     }else if(el.tagName==='SELECT'){
       const opts=await smartLoad(el);opts.forEach(v=>{if(![...el.options].some(o=>o.value===v.value_text)){const o=document.createElement('option');o.value=v.value_text;o.textContent=v.value_text;el.appendChild(o)}});
       const other=document.createElement('option');other.value='__OTHER__';other.textContent='Другое…';el.appendChild(other);
-      el.addEventListener('change',()=>{if(el.value==='__OTHER__'){const v=prompt(`Введите свой вариант для «${el.name}»`);if(v?.trim()){const o=document.createElement('option');o.value=v.trim();o.textContent=v.trim();el.insertBefore(o,other);el.value=v.trim();smartRemember(el,v)}}else smartRemember(el,el.value)});
+      el.addEventListener('change',async ()=>{if(el.value==='__OTHER__'){const v=(await uiPrompt(`Введите свой вариант для «${el.name}»`,{required:true}));if(v?.trim()){const o=document.createElement('option');o.value=v.trim();o.textContent=v.trim();el.insertBefore(o,other);el.value=v.trim();smartRemember(el,v)}}else smartRemember(el,el.value)});
     }
   }
 }
 function enhanceSmartFields(root=document){root.querySelectorAll?.('form').forEach(f=>smartEnhanceForm(f));}
 function smartTemplates(c){
  c.innerHTML=`<div class="card"><div class="top"><div><h2>Шаблоны MOSTIK</h2><p class="muted">Единые шаблоны для рациона, ветеринарии, анализов, тренировок, поведения и обогащения. Значения остаются редактируемыми.</p></div><button id="refreshSmartTemplates">Обновить</button></div><div id="smartTemplatesBody"><p class="muted">Загружаю…</p></div></div><div class="card" style="margin-top:18px"><h3>MOSTIK Inside · пользовательские варианты</h3><p class="muted">MOSTIK отслеживает «Другое…», частоту использования и вид животного. Администратор может перевести вариант в официальный справочник.</p><div id="smartCustomStats"><p class="muted">Загружаю…</p></div></div>`;
- const load=async()=>{try{const d=await api('smart-templates');document.querySelector('#smartTemplatesBody').innerHTML=SMART_SECTIONS.map(sec=>{const rows=(d.templates||[]).filter(x=>x.section===sec);return `<section class="card"><h3>${esc(sec)}</h3>${rows.length?rows.map(t=>`<article class="timeline"><b>${esc(t.name)}</b>${t.species?`<small>Вид: ${esc(t.species)}</small>`:''}<p>${esc(t.description||'')}</p><button type="button" class="danger delete-smart-template" data-id="${t.id}">Удалить</button></article>`).join(''):'<p class="muted">Шаблонов нет.</p>'}</section>`}).join('');document.querySelectorAll('.delete-smart-template').forEach(b=>b.onclick=async()=>{if(confirm('Удалить шаблон?')){await api(`smart-templates/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});load()}});if(state.user.effective_role==='admin'){const x=await api('admin/smart-dictionary?days=90');document.querySelector('#smartCustomStats').innerHTML=(x.values||[]).map(v=>`<div class="summary-row"><span>${esc(v.value_text)} · ${esc(v.section)}/${esc(v.field)}${v.species?' · '+esc(v.species):''}</span><b>${v.usage_count} · ${esc(v.status)}</b><button class="secondary smart-status" data-id="${v.id}" data-status="${v.status==='official'?'unverified':'official'}">${v.status==='official'?'Снять официальный':'Сделать официальным'}</button></div>`).join('')||'<p class="muted">Пользовательских вариантов пока нет.</p>';document.querySelectorAll('.smart-status').forEach(b=>b.onclick=async()=>{await api('admin/smart-dictionary/status',{method:'PUT',body:JSON.stringify({id:b.dataset.id,status:b.dataset.status})});load()})}else document.querySelector('#smartCustomStats').innerHTML='<p class="muted">Статистика проверки доступна администратору.</p>'}catch(e){document.querySelector('#smartTemplatesBody').innerHTML=`<p class="error">${esc(e.message)}</p>`}};
+ const load=async()=>{try{const d=await api('smart-templates');document.querySelector('#smartTemplatesBody').innerHTML=SMART_SECTIONS.map(sec=>{const rows=(d.templates||[]).filter(x=>x.section===sec);return `<section class="card"><h3>${esc(sec)}</h3>${rows.length?rows.map(t=>`<article class="timeline"><b>${esc(t.name)}</b>${t.species?`<small>Вид: ${esc(t.species)}</small>`:''}<p>${esc(t.description||'')}</p><button type="button" class="danger delete-smart-template" data-id="${t.id}">Удалить</button></article>`).join(''):'<p class="muted">Шаблонов нет.</p>'}</section>`}).join('');document.querySelectorAll('.delete-smart-template').forEach(b=>b.onclick=async()=>{if((await uiConfirm('Удалить шаблон?'))){await api(`smart-templates/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});load()}});if(state.user.effective_role==='admin'){const x=await api('admin/smart-dictionary?days=90');document.querySelector('#smartCustomStats').innerHTML=(x.values||[]).map(v=>`<div class="summary-row"><span>${esc(v.value_text)} · ${esc(v.section)}/${esc(v.field)}${v.species?' · '+esc(v.species):''}</span><b>${v.usage_count} · ${esc(v.status)}</b><button class="secondary smart-status" data-id="${v.id}" data-status="${v.status==='official'?'unverified':'official'}">${v.status==='official'?'Снять официальный':'Сделать официальным'}</button></div>`).join('')||'<p class="muted">Пользовательских вариантов пока нет.</p>';document.querySelectorAll('.smart-status').forEach(b=>b.onclick=async()=>{await api('admin/smart-dictionary/status',{method:'PUT',body:JSON.stringify({id:b.dataset.id,status:b.dataset.status})});load()})}else document.querySelector('#smartCustomStats').innerHTML='<p class="muted">Статистика проверки доступна администратору.</p>'}catch(e){document.querySelector('#smartTemplatesBody').innerHTML=`<p class="error">${esc(e.message)}</p>`}};
  document.querySelector('#refreshSmartTemplates').onclick=load;load();
 }
 
@@ -360,21 +480,43 @@ function bindAnimalContext(){
    setTimeout(()=>b.textContent=prev,1200);
  }));
 }
+// Возвращает массив задач при успехе и null при ошибке загрузки.
+// Раньше при ошибке возвращался [] — и экран показывал «Всё под контролем».
 async function loadGuidance(){
- try { const d=await api(`guidance${state.animal?`?animal_id=${encodeURIComponent(state.animal.id)}`:''}`); return d.actions||[]; } catch { return []; }
+ try {
+  const d=await api(`guidance${state.animal?`?animal_id=${encodeURIComponent(state.animal.id)}`:''}`);
+  return Array.isArray(d?.actions)?d.actions:null;
+ } catch(e) { console.warn('guidance load failed',e); return null; }
+}
+// Кнопка «Повторить» в карточке ошибки: один делегированный обработчик на всё приложение.
+if(!window.__guidanceRetryBound){
+ window.__guidanceRetryBound=true;
+ document.addEventListener('click',e=>{
+  const more=e.target?.closest?.('[data-guidance-more]');
+  if(more){ state.homeTaskLimit=1000; const content=document.querySelector('#content'); if(content) home(content); return; }
+  const b=e.target?.closest?.('[data-guidance-retry]'); if(!b) return;
+  b.disabled=true; b.textContent='Загружаю…';
+  const content=document.querySelector('#content'); if(content) home(content);
+ });
 }
 function renderGuidance(c, actions){
+ // undefined — ещё грузим; null — не удалось загрузить; [] — задач действительно нет
+ const guidanceHead=(sub)=>`<div class="top"><div><h3><span class="ui-emoji" aria-hidden="true">◆</span> Что делать сейчас</h3><p class="muted">${sub}</p></div></div>`;
+ if(actions===undefined) return `<div class="card guidance-card" aria-busy="true">${guidanceHead('Загружаю задачи…')}</div>`;
+ if(actions===null) return `<div class="card guidance-card">${guidanceHead('Не удалось загрузить список задач.')}<div class="notice guidance-error" role="alert">⚠ Задачи на сегодня не проверены — это не значит, что их нет. Проверьте соединение и повторите.</div><button type="button" class="secondary" data-guidance-retry>Повторить</button></div>`;
  const rank={critical:'Критично',high:'Высокая важность',medium:'Важно',low:'Информация'};
  const overdue=actions.filter(x=>x.priority==='critical'||x.priority==='high');
  const filter=state.homeTaskFilter||'all';
  if(!actions.length) return `<div class="card guidance-card"><div class="top"><div><h3><span class="ui-emoji" aria-hidden="true">◆</span> Что делать сейчас</h3><p class="muted">На данный момент обязательных действий нет.</p></div></div><div class="notice">✓ Всё основное на сегодня под контролем.</div></div>`;
  const shown=filter==='overdue'?overdue:actions;
- return `<div class="card guidance-card"><div class="top"><div><h3><span class="ui-emoji" aria-hidden="true">◆</span> Что делать сейчас</h3><p class="muted">MOSTIK расставил задачи по важности и времени.</p></div><span class="badge" id="guidanceCount">${shown.length} задач</span></div>
+ const limit=state.homeTaskLimit||12, visible=shown.slice(0,limit), hidden=shown.length-visible.length;
+ const taskWord=n=>{const a=n%10,b=n%100;return a===1&&b!==11?'задача':(a>=2&&a<=4&&(b<12||b>14))?'задачи':'задач'};
+ return `<div class="card guidance-card"><div class="top"><div><h3><span class="ui-emoji" aria-hidden="true">◆</span> Что делать сейчас</h3><p class="muted">MOSTIK расставил задачи по важности и времени.</p></div><span class="badge" id="guidanceCount">${hidden>0?visible.length+' из '+shown.length:shown.length} ${taskWord(shown.length)}</span></div>
  <div class="home-task-filters">
   <button type="button" class="chip-filter ${filter==='all'?'active':''}" data-home-filter="all">Все сегодня (${actions.length})</button>
   <button type="button" class="chip-filter ${filter==='overdue'?'active':''}" data-home-filter="overdue">Просроченное / срочное (${overdue.length})</button>
  </div>
- <div class="guidance-list">${shown.slice(0,12).map(x=>`<article class="guidance-item ${esc(x.priority)}" data-priority="${esc(x.priority)}"><div class="guidance-icon">${rank[x.priority]||'●'}</div><div class="guidance-main"><strong>${esc(x.title)}</strong><small>${esc(x.animal_name||'')}${x.detail?' · '+esc(x.detail):''}</small></div><button class="secondary guidance-open" data-animal-id="${esc(x.animal_id)}" data-view-target="${esc(x.view||'home')}">Открыть</button></article>`).join('')||'<p class="muted">По выбранному фильтру задач нет.</p>'}</div></div>`
+ <div class="guidance-list">${visible.map(x=>`<article class="guidance-item ${esc(x.priority)}" data-priority="${esc(x.priority)}"><div class="guidance-icon">${rank[x.priority]||'●'}</div><div class="guidance-main"><strong>${esc(x.title)}</strong><small>${esc(x.animal_name||'')}${x.detail?' · '+esc(x.detail):''}</small></div><button class="secondary guidance-open" data-animal-id="${esc(x.animal_id)}" data-view-target="${esc(x.view||'home')}">Открыть</button></article>`).join('')||'<p class="muted">По выбранному фильтру задач нет.</p>'}</div>${hidden>0?`<button type="button" class="secondary guidance-more" data-guidance-more>Показать все (${shown.length})</button>`:''}</div>`
 }
 function healthBanner(){
  const a=state.animal, list=a?.health_features||[]; if(!list.length)return '';
@@ -525,17 +667,17 @@ function settings(c){
  c.querySelector('#themeMode').addEventListener('change',liveSaveTheme);
  c.querySelector('#themeRadius')?.addEventListener('change',liveSaveTheme);
  c.querySelectorAll('[data-theme-choice]').forEach(b=>b.onclick=()=>{setField('scheme',b.dataset.themeChoice);liveSaveTheme()});
- c.querySelector('#saveSettings').onclick=()=>{const n={...getSettings()};c.querySelectorAll('select[name]').forEach(x=>n[x.name]=x.value);saveSettings(n);applySettings();alert('Настройки сохранены');render();};
- c.querySelector('#resetSettings').onclick=()=>{if(confirm('Сбросить все настройки MOSTIK на этом устройстве?')){localStorage.removeItem('mostik_settings');applySettings();render()}};
+ c.querySelector('#saveSettings').onclick=()=>{const n={...getSettings()};c.querySelectorAll('select[name]').forEach(x=>n[x.name]=x.value);saveSettings(n);applySettings();uiNotify('Настройки сохранены','ok');render();};
+ c.querySelector('#resetSettings').onclick=async ()=>{if((await uiConfirm('Сбросить все настройки MOSTIK на этом устройстве?'))){localStorage.removeItem('mostik_settings');applySettings();render()}};
  c.querySelector('#exportJson').onclick=()=>downloadText('mostik_backup.json',JSON.stringify({version:'5.0.6',exported_at:new Date().toISOString(),settings:getSettings(),animal:state.animal,skills:state.skills,today:state.today||null},null,2),'application/json');
  c.querySelector('#exportCsv').onclick=()=>downloadText('mostik_export.csv','MOSTIK\nЖивотное,Вид,Порода\n'+[state.animal?.name,state.animal?.species,state.animal?.breed].map(csv).join(',')+'\n\nНастройка,Значение\n'+Object.entries(getSettings()).map(([k,v])=>`${csv(k)},${csv(v)}`).join('\n'),'text/csv;charset=utf-8');
  c.querySelector('#printPdf').onclick=()=>window.print();
  c.querySelector('#backupSettings').onclick=()=>downloadText('mostik_settings_backup.json',JSON.stringify({settings:getSettings(),created_at:new Date().toISOString()},null,2),'application/json');
- c.querySelector('#importSettings').onchange=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);saveSettings(d.settings||d);applySettings();alert('Настройки импортированы');render()}catch{alert('Не удалось импортировать JSON')}};r.readAsText(f)};
+ c.querySelector('#importSettings').onchange=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);saveSettings(d.settings||d);applySettings();uiNotify('Настройки импортированы','ok');render()}catch{uiNotify('Не удалось импортировать JSON','err')}};r.readAsText(f)};
  c.querySelector('#replayOnboarding')?.addEventListener('click',()=>startOnboarding(true));
  c.querySelector('#goInsight')?.addEventListener('click',()=>view('insight'));
  c.querySelector('#goAdmin')?.addEventListener('click',()=>view('admin'));
- c.querySelector('#settingsInstall')?.addEventListener('click',async()=>{const ok=await installMostik();if(!ok)alert('Если автоматическая установка недоступна, откройте меню браузера и выберите «Добавить на главный экран».')});
+ c.querySelector('#settingsInstall')?.addEventListener('click',async()=>{const ok=await installMostik();if(!ok)uiAlert('Если автоматическая установка недоступна, откройте меню браузера и выберите «Добавить на главный экран».',{title:'Установка приложения'})});
 }
 function csv(v){return `"${String(v??'').replaceAll('"','""')}"`}
 function downloadText(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
@@ -1236,7 +1378,7 @@ function initErrorTelemetry(){
 
 async function doLogout(e){
   if(e){e.preventDefault();e.stopPropagation()}
-  if(!confirm('Выйти из MOSTIK?')) return;
+  if(!(await uiConfirm('Выйти из MOSTIK?'))) return;
   try{ await api('auth/logout',{method:'POST'}); }catch{}
   try{
     const keys=[];
@@ -1273,7 +1415,7 @@ function bindShell(){
      state.user=d.user;
      render();
    }catch(err){
-     alert(err.message);
+     uiNotify(err.message,'err');
      roleSel.value=state.user.effective_role||state.user.role;
    }
  };
@@ -1285,7 +1427,7 @@ function bindShell(){
   if(state.animal){state.skills=(await api(`animals/${state.animal.id}/skills`)).skills;await loadDefaults();}else state.skills=[];
   view('home');
  };
- const inst=document.querySelector('#installApp');if(inst)inst.onclick=async()=>{const ok=await installMostik();if(!ok)alert('Если установка недоступна автоматически, откройте меню браузера и выберите «Добавить на главный экран».');};
+ const inst=document.querySelector('#installApp');if(inst)inst.onclick=async()=>{const ok=await installMostik();if(!ok)uiAlert('Если установка недоступна автоматически, откройте меню браузера и выберите «Добавить на главный экран».',{title:'Установка приложения'});};
  const oh=document.querySelector('#openHealthFeatures');if(oh)oh.onclick=()=>developmentFeatures(document.querySelector('#content'))
 }
 async function loadDefaults(){if(!state.animal)return;try{state.defaults=await api(`defaults?animal_id=${encodeURIComponent(state.animal.id)}`)}catch{state.defaults=null}}
@@ -1589,8 +1731,9 @@ function home(c){
   const b=localDayBounds();
   c.innerHTML=(typeof homeHubBar==='function'?homeHubBar():'')+`<div class="top overview-head"><div><h2>Сегодня · все животные</h2><p class="muted">Сводка и события по всем животным, к которым у вас есть доступ.</p></div><div class="overview-count">${state.animals.length} животных</div></div>${scopeToolbar()}<div class="card today-tip"><b>Режим «Все животные»</b><span>Действия, которые требуют конкретного животного, доступны после его выбора в списке справа сверху.</span></div><div id="todayAll"><p class="muted">Загружаю события…</p></div>`;
   document.querySelector('#scopeSort')?.addEventListener('change',e=>{state.scopeSort=e.target.value;home(c)});
-  Promise.all(state.animals.map(async a=>{try{return {...(await api(`today?animal_id=${encodeURIComponent(a.id)}&from=${encodeURIComponent(b.from)}&to=${encodeURIComponent(b.to)}`)),animal:a}}catch{return {sessions:[],observations:[],food:[],vet:[],homework:[],animal:a}}})).then(all=>{
+  Promise.all(state.animals.map(async a=>{try{return {...(await api(`today?animal_id=${encodeURIComponent(a.id)}&from=${encodeURIComponent(b.from)}&to=${encodeURIComponent(b.to)}`)),animal:a}}catch{return {sessions:[],observations:[],food:[],vet:[],homework:[],animal:a,failed:true}}})).then(all=>{
     let animals=all.map(x=>x.animal); const m=state.scopeSort||'date_desc';
+    const failedAnimals=all.filter(x=>x.failed).map(x=>x.animal.name), allFailed=failedAnimals.length===all.length&&all.length>0;
     animals.sort((a,b)=>m==='name_desc'?b.name.localeCompare(a.name,'ru'):m==='name_asc'?a.name.localeCompare(b.name,'ru'):0);
     const totals={sessions:0,observations:0,food:0,vet:0}; const items=[];
     all.forEach(x=>{totals.sessions+=x.sessions?.length||0;totals.observations+=x.observations?.length||0;totals.food+=x.food?.length||0;totals.vet+=x.vet?.length||0;
@@ -1602,8 +1745,10 @@ function home(c){
     items.sort((a,b)=>{const d=new Date(a.t||0)-new Date(b.t||0);return (m==='date_asc'?d:-d)});
     if(homeSeq!==state.homeRenderSeq) return;
     c.querySelectorAll('#guidanceAllSlot').forEach(x=>x.remove());
-    const guidanceSlot=document.createElement('div'); guidanceSlot.id='guidanceAllSlot'; guidanceSlot.innerHTML=renderGuidance(c,[]); c.querySelector('#todayAll').before(guidanceSlot); loadGuidance().then(actions=>{if(homeSeq!==state.homeRenderSeq||!document.body.contains(guidanceSlot)) return;guidanceSlot.innerHTML=renderGuidance(c,actions);guidanceSlot.querySelectorAll('.guidance-open').forEach(btn=>btn.onclick=async()=>{const a2=state.animals.find(x=>x.id===btn.dataset.animalId);if(a2){state.animal=a2;state.skills=(await api(`animals/${a2.id}/skills`)).skills||[];await loadDefaults();view(btn.dataset.viewTarget||'home')}}); document.querySelectorAll('[data-home-filter]').forEach(b=>b.onclick=()=>{state.homeTaskFilter=b.dataset.homeFilter;const content=document.querySelector('#content'); if(content) home(content);});});
-    c.querySelector('#todayAll').innerHTML=`<div class="grid"><div class="card stat-card"><span class="muted">Тренировок сегодня</span><strong>${totals.sessions}</strong></div><div class="card stat-card"><span class="muted">Наблюдений</span><strong>${totals.observations}</strong></div><div class="card stat-card"><span class="muted">Рацион</span><strong>${totals.food}</strong></div><div class="card stat-card"><span class="muted">Ветеринария</span><strong>${totals.vet}</strong></div></div><div class="card"><h3>События дня</h3>${items.map(x=>`<article class="timeline"><small>${fmtDate(x.t)} · <span class="ui-emoji" aria-hidden="true">◆</span> ${esc(x.animal_name)} · ${x.type}</small>${x.html}</article>`).join('')||'<p class="muted">Сегодня записей ещё нет.</p>'}</div><div class="grid">${animals.map(a=>`<article class="card animal-overview-card" data-overview-animal="${esc(a.id)}" tabindex="0"><div class="animal-overview-head"><div class="animal-avatar">${animalSpeciesIcon(a)}</div><div><h3>${esc(a.name)}</h3><p class="muted">${esc(a.species||'')}${a.breed?' · '+esc(a.breed):''}</p></div></div><small class="muted">Открыть животное →</small></article>`).join('')}</div>`;
+    const guidanceSlot=document.createElement('div'); guidanceSlot.id='guidanceAllSlot'; guidanceSlot.innerHTML=renderGuidance(c,undefined); c.querySelector('#todayAll').before(guidanceSlot); loadGuidance().then(actions=>{if(homeSeq!==state.homeRenderSeq||!document.body.contains(guidanceSlot)) return;guidanceSlot.innerHTML=renderGuidance(c,actions);guidanceSlot.querySelectorAll('.guidance-open').forEach(btn=>btn.onclick=async()=>{const a2=state.animals.find(x=>x.id===btn.dataset.animalId);if(a2){state.animal=a2;state.skills=(await api(`animals/${a2.id}/skills`)).skills||[];await loadDefaults();view(btn.dataset.viewTarget||'home')}}); document.querySelectorAll('[data-home-filter]').forEach(b=>b.onclick=()=>{state.homeTaskFilter=b.dataset.homeFilter;const content=document.querySelector('#content'); if(content) home(content);});});
+    const loadWarn=failedAnimals.length?`<div class="notice guidance-error" role="alert">⚠ ${allFailed?'Не удалось загрузить события за сегодня.':'Данные загружены не полностью — не удалось получить: '+failedAnimals.map(esc).join(', ')+'. Цифры ниже неполные.'} <button type="button" class="secondary" data-guidance-retry>Повторить</button></div>`:'';
+    if(allFailed){ c.querySelector('#todayAll').innerHTML=loadWarn; return; }
+    c.querySelector('#todayAll').innerHTML=loadWarn+`<div class="grid"><div class="card stat-card"><span class="muted">Тренировок сегодня</span><strong>${totals.sessions}</strong></div><div class="card stat-card"><span class="muted">Наблюдений</span><strong>${totals.observations}</strong></div><div class="card stat-card"><span class="muted">Рацион</span><strong>${totals.food}</strong></div><div class="card stat-card"><span class="muted">Ветеринария</span><strong>${totals.vet}</strong></div></div><div class="card"><h3>События дня</h3>${items.map(x=>`<article class="timeline"><small>${fmtDate(x.t)} · <span class="ui-emoji" aria-hidden="true">◆</span> ${esc(x.animal_name)} · ${x.type}</small>${x.html}</article>`).join('')||(failedAnimals.length?'<p class="muted">Записей по загруженным животным нет.</p>':'<p class="muted">Сегодня записей ещё нет.</p>')}</div><div class="grid">${animals.map(a=>`<article class="card animal-overview-card" data-overview-animal="${esc(a.id)}" tabindex="0"><div class="animal-overview-head"><div class="animal-avatar">${animalSpeciesIcon(a)}</div><div><h3>${esc(a.name)}</h3><p class="muted">${esc(a.species||'')}${a.breed?' · '+esc(a.breed):''}</p></div></div><small class="muted">Открыть животное →</small></article>`).join('')}</div>`;
     document.querySelectorAll('#todayAll [data-overview-animal]').forEach(el=>{const open=()=>{const a=state.animals.find(x=>x.id===el.dataset.overviewAnimal);if(!a)return;state.animal=a;api(`animals/${encodeURIComponent(a.id)}/skills`).then(x=>{state.skills=x.skills||[];return loadDefaults()}).then(()=>view('home')).catch(()=>view('home'))};el.onclick=open;el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open()}}});
   });
   return;
@@ -1618,7 +1763,7 @@ function home(c){
  c.querySelectorAll('#guidanceSlot').forEach(x=>x.remove());
  loadGuidance().then(actions=>{if(homeSeq!==state.homeRenderSeq) return;const box=renderGuidance(c,actions);c.querySelectorAll('#guidanceSlot').forEach(x=>x.remove());const slot=document.createElement('div');slot.id='guidanceSlot';slot.innerHTML=box;const todayList=document.querySelector('#todayList');todayList?.parentNode?.insertBefore(slot,todayList);document.querySelectorAll('.guidance-open').forEach(btn=>btn.onclick=async()=>{const a2=state.animals.find(x=>x.id===btn.dataset.animalId);if(a2){state.animal=a2;state.skills=(await api(`animals/${a2.id}/skills`)).skills||[];await loadDefaults();view(btn.dataset.viewTarget||'home')}})});
  api(`today?animal_id=${encodeURIComponent(a.id)}&from=${encodeURIComponent(b.from)}&to=${encodeURIComponent(b.to)}`).then(d=>{
-  state.today=d; const items=[]; setTimeout(()=>document.querySelectorAll('.medication-give').forEach(b=>b.onclick=async()=>{try{await api(`medications/${b.dataset.id}/administrations`,{method:'POST',body:JSON.stringify({})});today(c)}catch(e){alert(e.message)}}),0); arr(d.sessions).forEach(x=>items.push({t:x.started_at,type:'Тренировка',html:`<b>Тренировка</b><span>${esc(x.author||'')} · ${x.duration_minutes||0} мин · успех ${x.success_score||'—'}/10</span>`})); arr(d.observations).forEach(x=>items.push({t:x.observed_at,type:'Наблюдение',html:`<b>Наблюдение</b><span>${esc(x.author||'')}${x.behavior_note?' · '+esc(x.behavior_note):''}${x.health_note?' · '+esc(x.health_note):''}${x.note?' · '+esc(x.note):''}</span>`})); arr(d.food).forEach(x=>items.push({t:x.logged_at,type:'Рацион',html:`<b>Рацион${x.meal?' · '+esc(x.meal):''}</b><span>${esc(x.author||'')} · съедено: ${esc(x.eaten||'—')}</span>`})); arr(d.vet).forEach(x=>items.push({t:x.updated_at,type:'Ветеринария',html:`<b>Ветеринария${x.medication_name?' · '+esc(x.medication_name):''}</b><span>${esc(x.vet_name||'')}${x.frequency?' · '+esc(x.frequency):''}</span>`})); arr(d.medications).forEach(x=>items.push({t:x.scheduled_at,type:'Лекарство',html:`<b><span class="ui-emoji" aria-hidden="true">💊</span> ${esc(x.medication_name)} · ${esc((x.scheduled_at||'').slice(11,16))}</b><span>${x.status==='given'?'✓ Препарат выдан':'! Не отмечено'}${x.dosage?' · '+esc(x.dosage):''}${x.route?' · '+esc(x.route):''}${x.status!=='given'?` <button class="secondary medication-give" data-id="${x.id}">✓ Препарат выдан</button>`:''}</span>`})); items.sort((x,y)=>new Date(y.t)-new Date(x.t));
+  state.today=d; const items=[]; setTimeout(()=>document.querySelectorAll('.medication-give').forEach(b=>b.onclick=async()=>{try{await api(`medications/${b.dataset.id}/administrations`,{method:'POST',body:JSON.stringify({})});today(c)}catch(e){uiNotify(e.message,'err')}}),0); arr(d.sessions).forEach(x=>items.push({t:x.started_at,type:'Тренировка',html:`<b>Тренировка</b><span>${esc(x.author||'')} · ${x.duration_minutes||0} мин · успех ${x.success_score||'—'}/10</span>`})); arr(d.observations).forEach(x=>items.push({t:x.observed_at,type:'Наблюдение',html:`<b>Наблюдение</b><span>${esc(x.author||'')}${x.behavior_note?' · '+esc(x.behavior_note):''}${x.health_note?' · '+esc(x.health_note):''}${x.note?' · '+esc(x.note):''}</span>`})); arr(d.food).forEach(x=>items.push({t:x.logged_at,type:'Рацион',html:`<b>Рацион${x.meal?' · '+esc(x.meal):''}</b><span>${esc(x.author||'')} · съедено: ${esc(x.eaten||'—')}</span>`})); arr(d.vet).forEach(x=>items.push({t:x.updated_at,type:'Ветеринария',html:`<b>Ветеринария${x.medication_name?' · '+esc(x.medication_name):''}</b><span>${esc(x.vet_name||'')}${x.frequency?' · '+esc(x.frequency):''}</span>`})); arr(d.medications).forEach(x=>items.push({t:x.scheduled_at,type:'Лекарство',html:`<b><span class="ui-emoji" aria-hidden="true">💊</span> ${esc(x.medication_name)} · ${esc((x.scheduled_at||'').slice(11,16))}</b><span>${x.status==='given'?'✓ Препарат выдан':'! Не отмечено'}${x.dosage?' · '+esc(x.dosage):''}${x.route?' · '+esc(x.route):''}${x.status!=='given'?` <button class="secondary medication-give" data-id="${x.id}">✓ Препарат выдан</button>`:''}</span>`})); items.sort((x,y)=>new Date(y.t)-new Date(x.t));
   const repeatAllowed={observation:['admin','owner','keeper','trainer','vet'].includes(state.user.effective_role),food:['admin','owner','keeper'].includes(state.user.effective_role),vet:['admin','vet'].includes(state.user.effective_role),training:['admin','trainer','keeper'].includes(state.user.effective_role)}; const latest=[];
   if(d.observations?.length&&repeatAllowed.observation){const x=d.observations.slice().sort((a,b)=>new Date(b.observed_at)-new Date(a.observed_at))[0];latest.push(`<article class="latest-card"><div><b>Последнее наблюдение</b><small>${fmtDate(x.observed_at)}</small></div><span>${esc(x.behavior_note||x.health_note||x.note||'Без комментария')}</span><button type="button" class="secondary" data-latest-repeat="observation" data-id="${x.id}">↻ Повторить</button></article>`)}
   if(d.food?.length&&repeatAllowed.food){const x=d.food.slice().sort((a,b)=>new Date(b.logged_at)-new Date(a.logged_at))[0];latest.push(`<article class="latest-card"><div><b>Последнее питание</b><small>${fmtDate(x.logged_at)}</small></div><span>${esc(x.meal||'Кормление')} · съедено: ${esc(x.eaten||'—')}</span><button type="button" class="secondary" data-latest-repeat="food" data-id="${x.id}">↻ Повторить</button></article>`)}
@@ -1626,7 +1771,7 @@ function home(c){
   if(d.sessions?.length&&repeatAllowed.training){const x=d.sessions.slice().sort((a,b)=>new Date(b.started_at)-new Date(a.started_at))[0];latest.push(`<article class="latest-card"><div><b>Последняя тренировка</b><small>${fmtDate(x.started_at)}</small></div><span>${esc(x.author||'')} · успех ${x.success_score||'—'}/10</span><button type="button" class="secondary" data-latest-repeat="training" data-id="${x.id}">↻ Повторить</button></article>`)}
   const due=(state.dueReminders||[]).filter(x=>x.animal_id===a.id);
   document.querySelector('#todayList').innerHTML=`${due.length?`<div class="card reminder-due"><h3><span class="ui-emoji" aria-hidden="true">🔔</span> Сейчас нужно сделать</h3>${due.slice(0,5).map(x=>`<div class="today-reminder"><b>${esc(x.title)}</b><small>${fmtDate(x.remind_at)}</small></div>`).join('')}</div>`:''}<div class="grid"><div class="card stat-card"><span class="muted">Событий сегодня</span><strong>${items.length}</strong></div><div class="card stat-card"><span class="muted">Активных заданий</span><strong>${d.homework.length}</strong></div></div>${latest.length?`<div class="card latest-wrap"><h3>Последние записи</h3>${latest.join('')}</div>`:''}<div class="card"><h3>Лента дня</h3>${items.map(x=>`<article class="timeline"><small>${fmtDate(x.t)} · ${x.type}</small>${x.html}</article>`).join('')||'<p class="muted">Сегодня записей ещё нет.</p>'}${d.homework.length?`<hr><h3>Ближайшие домашние задания</h3>${d.homework.map(x=>`<article class="timeline"><b>${esc(x.title)}</b><small>${x.due_date?'Срок: '+esc(x.due_date):'Без срока'} · ${esc(x.trainer_name)}</small><p>${esc(x.instructions)}</p></article>`).join('')}`:''}</div>`;
-  document.querySelectorAll('[data-latest-repeat]').forEach(btn=>btn.onclick=async()=>{const type=btn.dataset.latestRepeat;try{if(type==='training'){const x=d.sessions.find(v=>v.id===btn.dataset.id);if(!x)return;const full=await api(`sessions/${encodeURIComponent(x.id)}`);state.selected=full.skills.map(v=>v.skill_id);state.repeatTraining=full;view('training')}else{const source=type==='observation'?d.observations:type==='food'?d.food:d.vet;const x=source.find(v=>v.id===btn.dataset.id);if(x)repeatRecord(type,x)}}catch(e){alert(e.message)}});
+  document.querySelectorAll('[data-latest-repeat]').forEach(btn=>btn.onclick=async()=>{const type=btn.dataset.latestRepeat;try{if(type==='training'){const x=d.sessions.find(v=>v.id===btn.dataset.id);if(!x)return;const full=await api(`sessions/${encodeURIComponent(x.id)}`);state.selected=full.skills.map(v=>v.skill_id);state.repeatTraining=full;view('training')}else{const source=type==='observation'?d.observations:type==='food'?d.food:d.vet;const x=source.find(v=>v.id===btn.dataset.id);if(x)repeatRecord(type,x)}}catch(e){uiNotify(e.message,'err')}});
  }).catch(x=>document.querySelector('#todayList').innerHTML=`<div class="card error">${esc(x.message)}</div>`);
 }
 function openPlanReminderChooser(){
@@ -1640,14 +1785,14 @@ function openPlanReminderChooser(){
  wrap.querySelector('#chooseSchedule').onclick=()=>{close();view('calendar');setTimeout(()=>document.querySelector('#newSchedule')?.click(),50)};
  wrap.querySelector('#chooseReminder').onclick=()=>{close();quick('reminder')};
 }
-function quick(type){if(!state.animal)return;if(type==='plan-reminder'){openPlanReminderChooser();return;}const c=document.querySelector('#content');const now=new Date(),rep=state.repeat||state.defaults?.[type]||{};if(type==='repeat-training'){const last=state.today?.sessions?.[0];if(!last){alert('Сегодня тренировок ещё нет. Откройте историю тренировок и выберите нужную.');return}api(`sessions/${encodeURIComponent(last.id)}`).then(d=>{state.selected=d.skills.map(x=>x.skill_id);state.repeatTraining=d;view('training')}).catch(e=>alert(e.message));return}if(type==='training'){view('training');return}
+function quick(type){if(!state.animal)return;if(type==='plan-reminder'){openPlanReminderChooser();return;}const c=document.querySelector('#content');const now=new Date(),rep=state.repeat||state.defaults?.[type]||{};if(type==='repeat-training'){const last=state.today?.sessions?.[0];if(!last){uiNotify('Сегодня тренировок ещё нет. Откройте историю тренировок и выберите нужную.','warn');return}api(`sessions/${encodeURIComponent(last.id)}`).then(d=>{state.selected=d.skills.map(x=>x.skill_id);state.repeatTraining=d;view('training')}).catch(e=>uiNotify(e.message,'err'));return}if(type==='training'){view('training');return}
 if(type==='calendar'){view('calendar');return}
 if(type==='skills'){view('skills');return}
 if(type==='homework'){view('training');return}
 if(type==='analyses'){view('vet');setTimeout(()=>document.getElementById('vet-section-analyses')?.scrollIntoView({behavior:'smooth',block:'start'}),80);return}
 if(type==='meds'){view('vet');setTimeout(()=>document.getElementById('vet-section-meds')?.scrollIntoView({behavior:'smooth',block:'start'}),80);return}
 if(type==='food'){view('food');return}
-let form='';if(type==='observation')form=`<div class="card quick-card"><form id="quickForm"><h2>Быстрое наблюдение</h2><p class="muted">${esc(state.animal.name)} · ${esc(state.user.display_name)} · сейчас</p><p class="smart-default">Умные значения: последнее заполнение подставлено автоматически. При необходимости измените его.</p><div class="quick-presets"><button type="button" class="secondary preset" data-preset="behavior">Только поведение</button><button type="button" class="secondary preset" data-preset="health">Только здоровье</button><button type="button" class="secondary preset" data-preset="full">Поведение + здоровье</button></div><h4>Показатели</h4><div class="formgrid">${['activity','concentration','appetite','pain','arousal','stress','sleep'].map((k,i)=>`<label>${['Активность','Концентрация','Аппетит','Боль','Возбудимость','Стресс','Сон'][i]}<select name="${k}"><option value="">Не указано</option>${[1,2,3,4,5].map(x=>`<option value="${x}">${x}/5</option>`).join('')}</select></label>`).join('')}</div><label>Наблюдение за поведением<textarea name="behavior_note" placeholder="Что заметили в поведении?">${esc(rep.behavior_note||'')}</textarea></label><label>Наблюдение за здоровьем<textarea name="health_note" placeholder="Что заметили по здоровью?">${esc(rep.health_note||'')}</textarea></label><label>Дополнительная заметка<textarea name="note" placeholder="Короткий комментарий">${esc(rep.note||'')}</textarea></label><button>Сохранить наблюдение за поведением</button> <button type="button" class="secondary" id="quickCancel">Отмена</button></form></div>`;if(type==='food')form=`<div class="card quick-card"><form id="quickForm"><h2>Быстрое питание</h2><p class="muted">${esc(state.animal.name)} · ${esc(state.user.display_name)} · сейчас</p><p class="smart-default">Умные значения: последнее заполнение подставлено автоматически. При необходимости измените его.</p><div class="formgrid"><label>Приём пищи<input name="meal" placeholder="Приём пищи" value="${esc(rep.meal||'Кормление')}"></label><label>Предложено / количество<input name="offered" placeholder="Предложили / сколько" value="${esc(rep.offered||'')}"></label><label>Съедено<input name="eaten" placeholder="Съел" value="${esc(rep.eaten||'')}"></label><label>Не съедено<input name="not_eaten" placeholder="Что не съел" value="${esc(rep.not_eaten||'')}"></label></div><label>Аппетит<select name="appetite"><option value="">Не указано</option>${[1,2,3,4,5].map(x=>`<option value="${x}">${x}/5</option>`).join('')}</select></label><label>Комментарий<textarea name="note" placeholder="Комментарий">${esc(rep.note||'')}</textarea></label><button>Сохранить</button> <button type="button" class="secondary" id="quickCancel">Отмена</button></form></div>`;if(type==='reminder')form=`<div class="card quick-card"><form id="quickForm"><h2>Быстрое напоминание</h2><p class="muted">${esc(state.animal.name)} · ${esc(state.user.display_name)} · сейчас</p><label>Напомнить<input name="remind_at" type="datetime-local" required></label><label>Что напомнить<input name="title" placeholder="Например: дать лекарство" required></label><label>Подробности<textarea name="details" placeholder="Короткая инструкция"></textarea></label><label>Повтор<select name="repeat_type"><option value="once">Один раз</option><option value="daily">Ежедневно</option><option value="weekly">Еженедельно</option><option value="every_n_days">Каждые N дней</option></select></label><label id="everyDaysLabel" hidden>Каждые N дней<input name="every_n_days" type="number" min="1" value="2"></label><button>Сохранить напоминание</button> <button type="button" class="secondary" id="quickCancel">Отмена</button></form></div>`;if(type==='vet')form=`<div class="card quick-card"><form id="quickForm"><h2>Быстрая ветеринарная запись</h2><p class="muted">${esc(state.animal.name)} · ${esc(state.user.display_name)} · сейчас</p><p class="smart-default">Умные значения: последнее заполнение подставлено автоматически. При необходимости измените его.</p><label>Тип записи<select name="record_type"><option value="note" ${rep.record_type==='note'?'selected':''}>Состояние</option><option value="prescription" ${rep.record_type==='prescription'?'selected':''}>Назначение</option></select></label><label>Препарат<input name="medication_name" placeholder="Препарат" value="${esc(rep.medication_name||'')}"></label><label>Дозировка<input name="dosage" placeholder="Дозировка" value="${esc(rep.dosage||'')}"></label><label>Режим / частота<input name="frequency" placeholder="Режим / частота" value="${esc(rep.frequency||'')}"></label><label>Комментарий<textarea name="note" placeholder="Короткая запись">${esc(rep.note||'')}</textarea></label><button>Сохранить</button> <button type="button" class="secondary" id="quickCancel">Отмена</button></form></div>`;c.innerHTML=form;document.querySelector('#quickCancel').onclick=()=>{state.repeat=null;home(c)};const formEl=c.querySelector('#quickForm');for(const k of ['activity','arousal','stress','concentration','appetite','pain','sleep'])if(rep[k]!=null&&formEl.elements[k])formEl.elements[k].value=rep[k];c.querySelectorAll('.preset').forEach(btn=>btn.onclick=()=>{const p=btn.dataset.preset;if(formEl.elements.behavior_note)formEl.elements.behavior_note.focus();if(p==='health')formEl.elements.health_note.focus()});formEl.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(formEl));try{if(type==='observation'){for(const k of ['activity','arousal','stress','concentration','appetite','pain','sleep'])b[k]=b[k]?Number(b[k]):null;await api('observations',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id,observed_at:now.toISOString()})})}if(type==='food'){b.appetite=b.appetite?Number(b.appetite):null;await api('food',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id,logged_at:now.toISOString()})})}if(type==='vet')await api('vet',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id})});if(type==='reminder'){b.remind_at=new Date(b.remind_at).toISOString();b.animal_id=state.animal.id;await api('reminders',{method:'POST',body:JSON.stringify(b)});}state.repeat=null;home(c)}catch(e){alert(e.message)}}}
+let form='';if(type==='observation')form=`<div class="card quick-card"><form id="quickForm"><h2>Быстрое наблюдение</h2><p class="muted">${esc(state.animal.name)} · ${esc(state.user.display_name)} · сейчас</p><p class="smart-default">Умные значения: последнее заполнение подставлено автоматически. При необходимости измените его.</p><div class="quick-presets"><button type="button" class="secondary preset" data-preset="behavior">Только поведение</button><button type="button" class="secondary preset" data-preset="health">Только здоровье</button><button type="button" class="secondary preset" data-preset="full">Поведение + здоровье</button></div><h4>Показатели</h4><div class="formgrid">${['activity','concentration','appetite','pain','arousal','stress','sleep'].map((k,i)=>`<label>${['Активность','Концентрация','Аппетит','Боль','Возбудимость','Стресс','Сон'][i]}<select name="${k}"><option value="">Не указано</option>${[1,2,3,4,5].map(x=>`<option value="${x}">${x}/5</option>`).join('')}</select></label>`).join('')}</div><label>Наблюдение за поведением<textarea name="behavior_note" placeholder="Что заметили в поведении?">${esc(rep.behavior_note||'')}</textarea></label><label>Наблюдение за здоровьем<textarea name="health_note" placeholder="Что заметили по здоровью?">${esc(rep.health_note||'')}</textarea></label><label>Дополнительная заметка<textarea name="note" placeholder="Короткий комментарий">${esc(rep.note||'')}</textarea></label><button>Сохранить наблюдение за поведением</button> <button type="button" class="secondary" id="quickCancel">Отмена</button></form></div>`;if(type==='food')form=`<div class="card quick-card"><form id="quickForm"><h2>Быстрое питание</h2><p class="muted">${esc(state.animal.name)} · ${esc(state.user.display_name)} · сейчас</p><p class="smart-default">Умные значения: последнее заполнение подставлено автоматически. При необходимости измените его.</p><div class="formgrid"><label>Приём пищи<input name="meal" placeholder="Приём пищи" value="${esc(rep.meal||'Кормление')}"></label><label>Предложено / количество<input name="offered" placeholder="Предложили / сколько" value="${esc(rep.offered||'')}"></label><label>Съедено<input name="eaten" placeholder="Съел" value="${esc(rep.eaten||'')}"></label><label>Не съедено<input name="not_eaten" placeholder="Что не съел" value="${esc(rep.not_eaten||'')}"></label></div><label>Аппетит<select name="appetite"><option value="">Не указано</option>${[1,2,3,4,5].map(x=>`<option value="${x}">${x}/5</option>`).join('')}</select></label><label>Комментарий<textarea name="note" placeholder="Комментарий">${esc(rep.note||'')}</textarea></label><button>Сохранить</button> <button type="button" class="secondary" id="quickCancel">Отмена</button></form></div>`;if(type==='reminder')form=`<div class="card quick-card"><form id="quickForm"><h2>Быстрое напоминание</h2><p class="muted">${esc(state.animal.name)} · ${esc(state.user.display_name)} · сейчас</p><label>Напомнить<input name="remind_at" type="datetime-local" required></label><label>Что напомнить<input name="title" placeholder="Например: дать лекарство" required></label><label>Подробности<textarea name="details" placeholder="Короткая инструкция"></textarea></label><label>Повтор<select name="repeat_type"><option value="once">Один раз</option><option value="daily">Ежедневно</option><option value="weekly">Еженедельно</option><option value="every_n_days">Каждые N дней</option></select></label><label id="everyDaysLabel" hidden>Каждые N дней<input name="every_n_days" type="number" min="1" value="2"></label><button>Сохранить напоминание</button> <button type="button" class="secondary" id="quickCancel">Отмена</button></form></div>`;if(type==='vet')form=`<div class="card quick-card"><form id="quickForm"><h2>Быстрая ветеринарная запись</h2><p class="muted">${esc(state.animal.name)} · ${esc(state.user.display_name)} · сейчас</p><p class="smart-default">Умные значения: последнее заполнение подставлено автоматически. При необходимости измените его.</p><label>Тип записи<select name="record_type"><option value="note" ${rep.record_type==='note'?'selected':''}>Состояние</option><option value="prescription" ${rep.record_type==='prescription'?'selected':''}>Назначение</option></select></label><label>Препарат<input name="medication_name" placeholder="Препарат" value="${esc(rep.medication_name||'')}"></label><label>Дозировка<input name="dosage" placeholder="Дозировка" value="${esc(rep.dosage||'')}"></label><label>Режим / частота<input name="frequency" placeholder="Режим / частота" value="${esc(rep.frequency||'')}"></label><label>Комментарий<textarea name="note" placeholder="Короткая запись">${esc(rep.note||'')}</textarea></label><button>Сохранить</button> <button type="button" class="secondary" id="quickCancel">Отмена</button></form></div>`;c.innerHTML=form;document.querySelector('#quickCancel').onclick=()=>{state.repeat=null;home(c)};const formEl=c.querySelector('#quickForm');for(const k of ['activity','arousal','stress','concentration','appetite','pain','sleep'])if(rep[k]!=null&&formEl.elements[k])formEl.elements[k].value=rep[k];c.querySelectorAll('.preset').forEach(btn=>btn.onclick=()=>{const p=btn.dataset.preset;if(formEl.elements.behavior_note)formEl.elements.behavior_note.focus();if(p==='health')formEl.elements.health_note.focus()});formEl.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(formEl));try{if(type==='observation'){for(const k of ['activity','arousal','stress','concentration','appetite','pain','sleep'])b[k]=b[k]?Number(b[k]):null;await api('observations',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id,observed_at:now.toISOString()})})}if(type==='food'){b.appetite=b.appetite?Number(b.appetite):null;await api('food',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id,logged_at:now.toISOString()})})}if(type==='vet')await api('vet',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id})});if(type==='reminder'){b.remind_at=new Date(b.remind_at).toISOString();b.animal_id=state.animal.id;await api('reminders',{method:'POST',body:JSON.stringify(b)});}state.repeat=null;home(c)}catch(e){uiNotify(e.message,'err')}}}
 
 function renderHealthBannerOnly(){const old=document.querySelector('.health-banner'); if(!old)return; old.outerHTML=healthBanner(); const b=document.querySelector('#openHealthFeatures');if(b)b.onclick=()=>developmentFeatures(document.querySelector('#content'));}
 function developmentFeatureLabel(status){return ({confirmed:'Подтверждено врачом/специалистом',suspected:'Предположение',observation:'Наблюдение'})[status]||'Наблюдение'}
@@ -1657,17 +1802,17 @@ function developmentFeatures(c){
  const canEdit=['admin','owner'].includes(state.user.effective_role);
  c.innerHTML=`<div class="health-management card"><div class="top"><div><span class="health-kicker"><span class="ui-emoji" aria-hidden="true">✚</span> ОБЯЗАТЕЛЬНО К ПРОВЕРКЕ ПЕРЕД РАБОТОЙ</span><h2>Особенности здоровья · ${esc(state.animal.name)}</h2><p class="muted">Эти сведения всегда показываются специалистам, имеющим доступ к животному.</p></div></div>${(['admin','owner','vet'].includes(state.user.effective_role))?`<form id="healthFeatureForm" class="health-feature-form"><label>Особенность здоровья<select name="preset">${HEALTH_PRESETS.map(x=>`<option value="${x.type}">${x.title}</option>`).join('')}</select></label><label>Название / уточнение<input name="title" placeholder="Например: аллергия на курицу" required></label><div class="formgrid"><label>Важность<select name="severity"><option value="critical">Критично — специалист обязан учитывать</option><option value="important" selected>Важно — учитывать в работе</option><option value="info">Информация</option></select></label><label>Статус<select name="status"><option value="observation">Наблюдение</option><option value="suspected">Подозрение</option><option value="confirmed">Подтверждено врачом</option></select></label></div><label>Что важно знать специалисту<textarea name="note" placeholder="Ограничения, триггеры, лекарства, рекомендации и т. п."></textarea></label><button>Добавить особенность здоровья</button></form>`:''}<div id="healthFeatureList"><p class="muted">Загружаю…</p></div></div><div class="card"><div class="top"><div><h2>Особенности развития и поведения · ${esc(state.animal.name)}</h2><p class="muted">Это не автоматические диагнозы. Здесь фиксируются подтверждённые состояния, предположения и наблюдения.</p></div><button type="button" class="secondary" id="backAnimals">← К животным</button></div>${canEdit?`<form id="devFeatureForm" class="animal-form"><label>Категория<select name="category">${developmentFeatureCategories().map(x=>`<option>${x}</option>`).join('')}</select></label><label>Особенность<input name="title" placeholder="Например: трудности концентрации, чувствительность к звукам" required></label><label>Статус<select name="status"><option value="observation">Наблюдение</option><option value="suspected">Предположение</option><option value="confirmed">Подтверждено врачом/специалистом</option></select></label><label>Комментарий / описание<textarea name="note" placeholder="Что именно наблюдается, при каких условиях, рекомендации специалиста"></textarea></label><button>Добавить особенность</button></form>`:''}<div id="devFeatureList"><p class="muted">Загружаю…</p></div></div>`;
  document.querySelector('#backAnimals').onclick=()=>animals(c);
- const loadHealth=()=>api(`animals/${encodeURIComponent(state.animal.id)}/health-features`).then(d=>{const list=d.features||[];document.querySelector('#healthFeatureList').innerHTML=list.length?`<div class="health-list"><h3>Сведения, которые специалист должен видеть</h3>${list.map(x=>`<article class="health-item ${x.severity==='critical'?'critical':x.severity==='important'?'important':''}"><div><span class="health-title">${esc(x.title)}</span><span class="health-badges"><em>${esc(healthSeverityLabel(x.severity))}</em><em>${esc(healthStatusLabel(x.status))}</em></span>${x.note?`<p>${esc(x.note)}</p>`:''}</div>${['admin','owner','vet'].includes(state.user.effective_role)?`<div class="actions"><button type="button" class="danger delete-health" data-id="${x.id}">Удалить</button></div>`:''}</article>`).join('')}</div>`:'<p class="muted">Особенности здоровья пока не добавлены.</p>';document.querySelectorAll('.delete-health').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить эту особенность здоровья?'))return;await api(`animals/${state.animal.id}/health-features`,{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});const all=(await api('animals')).animals;state.animals=all;state.animal=all.find(a=>a.id===state.animal.id)||state.animal;loadHealth();renderHealthBannerOnly()})}).catch(e=>document.querySelector('#healthFeatureList').innerHTML=`<p class="error">${esc(e.message)}</p>`);
- document.querySelector('#healthFeatureForm')?.addEventListener('submit',async e=>{e.preventDefault();try{const b=Object.fromEntries(new FormData(e.target));await api(`animals/${state.animal.id}/health-features`,{method:'POST',body:JSON.stringify({feature_type:b.preset,title:b.title,severity:b.severity,status:b.status,note:b.note})});e.target.reset();loadHealth()}catch(err){alert(err.message)}});
- const load=()=>api(`animals/${encodeURIComponent(state.animal.id)}/development-features`).then(d=>{const list=d.features||[];document.querySelector('#devFeatureList').innerHTML=list.length?`<h3>Зафиксированные особенности</h3><div class="grid">${list.map(x=>`<article class="timeline"><b>${esc(x.title)}</b><small>${esc(x.category)} · ${developmentFeatureLabel(x.status)}</small>${x.note?`<p>${esc(x.note)}</p>`:''}${canEdit?`<div class="actions"><button type="button" class="secondary edit-dev" data-id="${x.id}">Редактировать</button><button type="button" class="danger delete-dev" data-id="${x.id}">Удалить</button></div>`:''}</article>`).join('')}</div>`:'<p class="muted">Особенности пока не добавлены.</p>';document.querySelectorAll('.edit-dev').forEach(b=>b.onclick=()=>editDevelopmentFeature(c,list.find(x=>x.id===b.dataset.id)));document.querySelectorAll('.delete-dev').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить эту особенность?'))return;await api(`animals/${state.animal.id}/development-features`,{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});load()})}).catch(e=>document.querySelector('#devFeatureList').innerHTML=`<p class="error">${esc(e.message)}</p>`);
- document.querySelector('#devFeatureForm')?.addEventListener('submit',async e=>{e.preventDefault();try{const b=Object.fromEntries(new FormData(e.target));await api(`animals/${state.animal.id}/development-features`,{method:'POST',body:JSON.stringify(b)});e.target.reset();load()}catch(x){alert(x.message)}});load();
+ const loadHealth=()=>api(`animals/${encodeURIComponent(state.animal.id)}/health-features`).then(d=>{const list=d.features||[];document.querySelector('#healthFeatureList').innerHTML=list.length?`<div class="health-list"><h3>Сведения, которые специалист должен видеть</h3>${list.map(x=>`<article class="health-item ${x.severity==='critical'?'critical':x.severity==='important'?'important':''}"><div><span class="health-title">${esc(x.title)}</span><span class="health-badges"><em>${esc(healthSeverityLabel(x.severity))}</em><em>${esc(healthStatusLabel(x.status))}</em></span>${x.note?`<p>${esc(x.note)}</p>`:''}</div>${['admin','owner','vet'].includes(state.user.effective_role)?`<div class="actions"><button type="button" class="danger delete-health" data-id="${x.id}">Удалить</button></div>`:''}</article>`).join('')}</div>`:'<p class="muted">Особенности здоровья пока не добавлены.</p>';document.querySelectorAll('.delete-health').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить эту особенность здоровья?')))return;await api(`animals/${state.animal.id}/health-features`,{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});const all=(await api('animals')).animals;state.animals=all;state.animal=all.find(a=>a.id===state.animal.id)||state.animal;loadHealth();renderHealthBannerOnly()})}).catch(e=>document.querySelector('#healthFeatureList').innerHTML=`<p class="error">${esc(e.message)}</p>`);
+ document.querySelector('#healthFeatureForm')?.addEventListener('submit',async e=>{e.preventDefault();try{const b=Object.fromEntries(new FormData(e.target));await api(`animals/${state.animal.id}/health-features`,{method:'POST',body:JSON.stringify({feature_type:b.preset,title:b.title,severity:b.severity,status:b.status,note:b.note})});e.target.reset();loadHealth()}catch(err){uiNotify(err.message,'err')}});
+ const load=()=>api(`animals/${encodeURIComponent(state.animal.id)}/development-features`).then(d=>{const list=d.features||[];document.querySelector('#devFeatureList').innerHTML=list.length?`<h3>Зафиксированные особенности</h3><div class="grid">${list.map(x=>`<article class="timeline"><b>${esc(x.title)}</b><small>${esc(x.category)} · ${developmentFeatureLabel(x.status)}</small>${x.note?`<p>${esc(x.note)}</p>`:''}${canEdit?`<div class="actions"><button type="button" class="secondary edit-dev" data-id="${x.id}">Редактировать</button><button type="button" class="danger delete-dev" data-id="${x.id}">Удалить</button></div>`:''}</article>`).join('')}</div>`:'<p class="muted">Особенности пока не добавлены.</p>';document.querySelectorAll('.edit-dev').forEach(b=>b.onclick=()=>editDevelopmentFeature(c,list.find(x=>x.id===b.dataset.id)));document.querySelectorAll('.delete-dev').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить эту особенность?')))return;await api(`animals/${state.animal.id}/development-features`,{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});load()})}).catch(e=>document.querySelector('#devFeatureList').innerHTML=`<p class="error">${esc(e.message)}</p>`);
+ document.querySelector('#devFeatureForm')?.addEventListener('submit',async e=>{e.preventDefault();try{const b=Object.fromEntries(new FormData(e.target));await api(`animals/${state.animal.id}/development-features`,{method:'POST',body:JSON.stringify(b)});e.target.reset();load()}catch(x){uiNotify(x.message,'err')}});load();
 }
-function editDevelopmentFeature(c,x){const cats=developmentFeatureCategories();c.innerHTML=`<div class="card"><h2>Редактировать особенность развития</h2><form id="devEdit"><label>Категория<select name="category">${cats.map(v=>`<option ${v===x.category?'selected':''}>${v}</option>`).join('')}</select></label><label>Особенность<input name="title" value="${esc(x.title)}" required></label><label>Статус<select name="status"><option value="observation" ${x.status==='observation'?'selected':''}>Наблюдение</option><option value="suspected" ${x.status==='suspected'?'selected':''}>Предположение</option><option value="confirmed" ${x.status==='confirmed'?'selected':''}>Подтверждено врачом/специалистом</option></select></label><label>Комментарий / описание<textarea name="note">${esc(x.note||'')}</textarea></label><button>Сохранить</button><button type="button" class="secondary" id="cancelDev">Отмена</button></form></div>`;document.querySelector('#cancelDev').onclick=()=>developmentFeatures(c);document.querySelector('#devEdit').onsubmit=async e=>{e.preventDefault();try{await api(`animals/${state.animal.id}/development-features`,{method:'PUT',body:JSON.stringify({...Object.fromEntries(new FormData(e.target)),id:x.id})});developmentFeatures(c)}catch(err){alert(err.message)}}}
+function editDevelopmentFeature(c,x){const cats=developmentFeatureCategories();c.innerHTML=`<div class="card"><h2>Редактировать особенность развития</h2><form id="devEdit"><label>Категория<select name="category">${cats.map(v=>`<option ${v===x.category?'selected':''}>${v}</option>`).join('')}</select></label><label>Особенность<input name="title" value="${esc(x.title)}" required></label><label>Статус<select name="status"><option value="observation" ${x.status==='observation'?'selected':''}>Наблюдение</option><option value="suspected" ${x.status==='suspected'?'selected':''}>Предположение</option><option value="confirmed" ${x.status==='confirmed'?'selected':''}>Подтверждено врачом/специалистом</option></select></label><label>Комментарий / описание<textarea name="note">${esc(x.note||'')}</textarea></label><button>Сохранить</button><button type="button" class="secondary" id="cancelDev">Отмена</button></form></div>`;document.querySelector('#cancelDev').onclick=()=>developmentFeatures(c);document.querySelector('#devEdit').onsubmit=async e=>{e.preventDefault();try{await api(`animals/${state.animal.id}/development-features`,{method:'PUT',body:JSON.stringify({...Object.fromEntries(new FormData(e.target)),id:x.id})});developmentFeatures(c)}catch(err){uiNotify(err.message,'err')}}}
 
 function printAnimalCard(a){
   if(!a){try{toast('Нет животного','warn')}catch{};return}
   const w=window.open('','_blank');
-  if(!w){alert('Разрешите всплывающие окна для печати');return}
+  if(!w){uiNotify('Разрешите всплывающие окна для печати','warn');return}
   const photo=a.photo_data?`<img src="${a.photo_data}" style="width:96px;height:96px;object-fit:cover;border-radius:8px">`:'';
   const att=(a.attention||a.health_features||[]).map(x=>`<li>${esc(x.title||x.category||'')}</li>`).join('');
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(a.name)} — карточка MOSTIK</title>
@@ -1700,7 +1845,7 @@ function printAnimalCard(a){
 
 function photoMarkup(a, cls='animal-avatar'){return a?.photo_data?`<img class="${cls} animal-photo" src="${esc(a.photo_data)}" alt="Фото ${esc(a.name||'животного')}">`:`<span class="${cls}">${animalSpeciesIcon(a)}</span>`}
 async function fileToCompressedDataUrl(file){return await new Promise((resolve,reject)=>{const r=new FileReader();r.onerror=()=>reject(new Error('Не удалось прочитать фото'));r.onload=()=>{const img=new Image();img.onload=()=>{const max=1200,scale=Math.min(1,max/Math.max(img.width,img.height)),w=Math.max(1,Math.round(img.width*scale)),h=Math.max(1,Math.round(img.height*scale));const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d',{alpha:true});ctx.drawImage(img,0,0,w,h);resolve(canvas.toDataURL('image/webp',0.82))};img.onerror=()=>reject(new Error('Не удалось открыть изображение'));img.src=r.result};r.readAsDataURL(file)})}
-function photoEditor(c,a,after){const can=['admin','owner'].includes(state.user.effective_role); if(!can){alert('Фото профиля может менять администратор или владелец.');return;} const old=a?.photo_data||''; const wrap=document.createElement('div'); wrap.className='modal-backdrop'; wrap.innerHTML=`<div class="modal-card photo-modal" role="dialog" aria-modal="true"><div class="top"><div><h2>Фото профиля</h2><p class="muted">${esc(a.name)} · фото будет автоматически сжато для быстрой загрузки.</p></div><button type="button" class="secondary photo-close">×</button></div><div class="photo-preview">${old?`<img src="${esc(old)}" alt="Фото">`:`<div class="photo-placeholder">${animalSpeciesIcon(a)}</div>`}</div><label class="file-label">Выбрать фото<input id="animalPhotoFile" type="file" accept="image/*" hidden></label><div class="actions"><button type="button" class="primary photo-save" disabled>Сохранить фото</button>${old?`<button type="button" class="danger photo-delete">Удалить фото</button>`:''}</div></div>`;document.body.append(wrap);const close=()=>wrap.remove();wrap.querySelector('.photo-close').onclick=close;wrap.addEventListener('click',e=>{if(e.target===wrap)close()});let data=old;const file=wrap.querySelector('#animalPhotoFile');const save=wrap.querySelector('.photo-save');file.onchange=async()=>{const f=file.files?.[0];if(!f)return;try{data=await fileToCompressedDataUrl(f);wrap.querySelector('.photo-preview').innerHTML=`<img src="${esc(data)}" alt="Предпросмотр">`;save.disabled=false;}catch(e){alert(e.message)}};save.onclick=async()=>{try{save.disabled=true;await api(`animals/${a.id}/photo`,{method:'PUT',body:JSON.stringify({photo_data:data})});state.animals=(await api('animals')).animals;a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){save.disabled=false;alert(e.message)}};wrap.querySelector('.photo-delete')?.addEventListener('click',async()=>{if(!confirm('Удалить фото профиля?'))return;try{await api(`animals/${a.id}/photo`,{method:'DELETE'});state.animals=(await api('animals')).animals;a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){alert(e.message)}});wrap.querySelector('.file-label').focus?.()}
+function photoEditor(c,a,after){const can=['admin','owner'].includes(state.user.effective_role); if(!can){uiNotify('Фото профиля может менять администратор или владелец.','warn');return;} const old=a?.photo_data||''; const wrap=document.createElement('div'); wrap.className='modal-backdrop'; wrap.innerHTML=`<div class="modal-card photo-modal" role="dialog" aria-modal="true"><div class="top"><div><h2>Фото профиля</h2><p class="muted">${esc(a.name)} · фото будет автоматически сжато для быстрой загрузки.</p></div><button type="button" class="secondary photo-close">×</button></div><div class="photo-preview">${old?`<img src="${esc(old)}" alt="Фото">`:`<div class="photo-placeholder">${animalSpeciesIcon(a)}</div>`}</div><label class="file-label">Выбрать фото<input id="animalPhotoFile" type="file" accept="image/*" hidden></label><div class="actions"><button type="button" class="primary photo-save" disabled>Сохранить фото</button>${old?`<button type="button" class="danger photo-delete">Удалить фото</button>`:''}</div></div>`;document.body.append(wrap);const close=()=>wrap.remove();wrap.querySelector('.photo-close').onclick=close;wrap.addEventListener('click',e=>{if(e.target===wrap)close()});let data=old;const file=wrap.querySelector('#animalPhotoFile');const save=wrap.querySelector('.photo-save');file.onchange=async()=>{const f=file.files?.[0];if(!f)return;try{data=await fileToCompressedDataUrl(f);wrap.querySelector('.photo-preview').innerHTML=`<img src="${esc(data)}" alt="Предпросмотр">`;save.disabled=false;}catch(e){uiNotify(e.message,'err')}};save.onclick=async()=>{try{save.disabled=true;await api(`animals/${a.id}/photo`,{method:'PUT',body:JSON.stringify({photo_data:data})});state.animals=(await api('animals')).animals;a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){save.disabled=false;uiNotify(e.message,'err')}};wrap.querySelector('.photo-delete')?.addEventListener('click',async()=>{if(!(await uiConfirm('Удалить фото профиля?')))return;try{await api(`animals/${a.id}/photo`,{method:'DELETE'});state.animals=(await api('animals')).animals;a=state.animals.find(x=>x.id===a.id)||a;if(state.animal?.id===a.id)state.animal=a;close();after?.(a);}catch(e){uiNotify(e.message,'err')}});wrap.querySelector('.file-label').focus?.()}
 async function loadAnimalCatalog(){
   if(state.animalCatalog?.length) return state.animalCatalog;
   try{ const d=await api('animal-catalog'); state.animalCatalog=Array.isArray(d.catalog)?d.catalog:[]; }
@@ -1755,8 +1900,8 @@ function setupAnimalCombobox(input,{kind,onSelect}={}){
     menu.insertAdjacentHTML('beforeend',other);
     menu.hidden=false;
     menu.querySelectorAll('[data-value]').forEach(b=>b.onclick=()=>{input.value=b.dataset.value;hide();onSelect?.(input.value)});
-    menu.querySelector('[data-other]')?.addEventListener('click',()=>{
-      const v=prompt(kind==='species'?'Введите свой вид животного:':'Введите свой подвид животного:',input.value||'');
+    menu.querySelector('[data-other]')?.addEventListener('click',async ()=>{
+      const v=(await uiPrompt(kind==='species'?'Введите свой вид животного:':'Введите свой подвид животного:',{value:(input.value||''),required:true}));
       if(v?.trim()){input.value=v.trim();hide();onSelect?.(input.value,true);smartRemember(input,v)}
     });
   };
@@ -1861,12 +2006,12 @@ document.querySelectorAll('.export-animal-data').forEach(b=>b.onclick=async e=>{
     a.download=`mostik-export-${(d.animal?.name||'animal').replace(/\s+/g,'_')}-${new Date().toISOString().slice(0,10)}.json`;
     a.click(); URL.revokeObjectURL(a.href);
     try{toast('Экспорт скачан','ok')}catch{}
-  }catch(err){try{toast(err.message||'Ошибка экспорта','warn')}catch{alert(err.message)}}
+  }catch(err){try{toast(err.message||'Ошибка экспорта','warn')}catch{uiNotify(err.message,'err')}}
 });
 document.querySelectorAll('.copy-animal-id').forEach(b=>b.onclick=async e=>{e.stopPropagation();const ok=await copyText(b.dataset.id);const prev=b.textContent;b.textContent=ok?'Скопировано':'Ошибка';setTimeout(()=>b.textContent=prev,1400);});
- document.querySelectorAll('.status-edit').forEach(b=>b.onclick=async()=>{const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;const status=prompt('Статус: normal / attention / critical',a.status||'normal');if(!['normal','attention','critical'].includes(status||''))return;try{await api(`animals/${a.id}/status`,{method:'PUT',body:JSON.stringify({status})});state.animals=(await api('animals')).animals;if(state.animal?.id===a.id)state.animal=state.animals.find(x=>x.id===a.id)||state.animal;render()}catch(e){alert(e.message)}});
- document.querySelectorAll('.delete-animal').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить животное и все связанные записи? Это действие необратимо.'))return;try{await api(`animals/${b.dataset.id}`,{method:'DELETE'});state.animals=(await api('animals')).animals;const pref=getSettings();state.animal=state.animals.find(a=>a.name===pref.default_animal)||state.animals[0]||null;if(state.animal){state.skills=(await api(`animals/${state.animal.id}/skills`)).skills;await loadDefaults()}applySettings();render()}catch(x){alert(x.message)}});
- document.querySelectorAll('.detach-animal').forEach(b=>b.onclick=async e=>{e.stopPropagation();const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;if(!confirm(`Убрать «${a.name}» из вашего окружения? Данные животного и доступ владельца сохранятся.`))return;try{await api(`animals/${a.id}`,{method:'DELETE'});state.animals=(await api('animals')).animals;if(state.animal?.id===a.id){state.animal=state.animals[0]||null;state.skills=[];saveActiveAnimal()}applySettings();render();try{toast(`«${a.name}» убрано из вашего окружения`,'ok')}catch{}}catch(x){alert(x.message||'Не удалось убрать животное из окружения')}});
+ document.querySelectorAll('.status-edit').forEach(b=>b.onclick=async()=>{const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;const status=await uiChoice('Статус: «'+a.name+'»',['normal','attention','critical'].map(v=>[v,animalStatusLabel(v)]),a.status||'normal',{submit:'Сохранить'});if(!['normal','attention','critical'].includes(status||''))return;try{await api(`animals/${a.id}/status`,{method:'PUT',body:JSON.stringify({status})});state.animals=(await api('animals')).animals;if(state.animal?.id===a.id)state.animal=state.animals.find(x=>x.id===a.id)||state.animal;render()}catch(e){uiNotify(e.message,'err')}});
+ document.querySelectorAll('.delete-animal').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить животное и все связанные записи? Это действие необратимо.')))return;try{await api(`animals/${b.dataset.id}`,{method:'DELETE'});state.animals=(await api('animals')).animals;const pref=getSettings();state.animal=state.animals.find(a=>a.name===pref.default_animal)||state.animals[0]||null;if(state.animal){state.skills=(await api(`animals/${state.animal.id}/skills`)).skills;await loadDefaults()}applySettings();render()}catch(x){uiNotify(x.message,'err')}});
+ document.querySelectorAll('.detach-animal').forEach(b=>b.onclick=async e=>{e.stopPropagation();const a=state.animals.find(x=>x.id===b.dataset.id);if(!a)return;if(!(await uiConfirm(`Убрать «${a.name}» из вашего окружения? Данные животного и доступ владельца сохранятся.`)))return;try{await api(`animals/${a.id}`,{method:'DELETE'});state.animals=(await api('animals')).animals;if(state.animal?.id===a.id){state.animal=state.animals[0]||null;state.skills=[];saveActiveAnimal()}applySettings();render();try{toast(`«${a.name}» убрано из вашего окружения`,'ok')}catch{}}catch(x){uiNotify(x.message||'Не удалось убрать животное из окружения','err')}});
 const modal=document.querySelector('#animalAddModal');
 
 if(modal){
@@ -1928,7 +2073,7 @@ modal.querySelector('#pasteAnimalId')?.addEventListener('click',async()=>{
   const t=(await pasteText()).trim();
   const input=modal.querySelector('#joinAnimalId');
   if(input && t){ input.value=t; input.focus(); }
-  else if(!t) alert('Не удалось прочитать буфер обмена. Вставьте ID вручную (Ctrl+V / ⌘V).');
+  else if(!t) uiNotify('Не удалось прочитать буфер обмена. Вставьте ID вручную (Ctrl+V / ⌘V).','warn');
 });
 modal.querySelector('#cancelJoinAnimal')?.addEventListener('click',()=>{
   const canCreate=['admin','owner','keeper'].includes(state.user?.effective_role||state.user?.role);
@@ -1937,7 +2082,7 @@ modal.querySelector('#cancelJoinAnimal')?.addEventListener('click',()=>{
 modal.querySelector('#joinAnimalSubmit')?.addEventListener('click',async()=>{
   const input=modal.querySelector('#joinAnimalId');
   const aid=String(input?.value||'').trim();
-  if(!aid){ alert('Введите ID животного'); return; }
+  if(!aid){ uiNotify('Введите ID животного','warn'); return; }
   try{
     const res=await api('animals/access',{method:'POST',body:JSON.stringify({animal_id:aid})});
     state.animals=(await api('animals')).animals;
@@ -1946,7 +2091,7 @@ modal.querySelector('#joinAnimalSubmit')?.addEventListener('click',async()=>{
     close();
     render();
     try{toast(res?.animal?.name ? `Животное «${res.animal.name}» добавлено` : 'Животное добавлено','ok')}catch{}; try{updateNavBadges()}catch{};
-  }catch(x){ alert(x.message||'Не удалось добавить животное по ID'); }
+  }catch(x){ uiNotify(x.message||'Не удалось добавить животное по ID','err'); }
 });
 const bindOpen=el=>{
   if(!el)return;
@@ -2004,13 +2149,13 @@ if(photoInput){
     try{
       createPhotoData=await fileToCompressedDataUrl(f);
       createPhotoPreview.innerHTML=`<img src="${esc(createPhotoData)}" alt="Предпросмотр" class="create-photo-thumb">`;
-    }catch(err){alert(err.message); createPhotoData=null;}
+    }catch(err){uiNotify(err.message,'err'); createPhotoData=null;}
   };
 }
 const submitAnimalCreate=async e=>{e.preventDefault?.();try{const modeVal=document.querySelector('#addModeValue')?.value||'create'; if(modeVal==='join'){document.querySelector('#joinAnimalSubmit')?.click();return;}
 // Button click passes the button as e.target — FormData needs the <form>
 const form=e?.target?.closest?.('form')||modal.querySelector('#animalAdd')||document.querySelector('#animalAdd');
-if(!form){ try{toast('Форма не найдена','warn')}catch{alert('Форма не найдена')}; return; }
+if(!form){ try{toast('Форма не найдена','warn')}catch{uiNotify('Форма не найдена','warn')}; return; }
 const f=Object.fromEntries(new FormData(form)),attention=[];
 // Client-side validation with field highlight
 const nameEl=form.querySelector('[name="name"]');
@@ -2019,10 +2164,10 @@ form.querySelectorAll('.field-invalid').forEach(x=>x.classList.remove('field-inv
 let invalid=false;
 if(!String(f.name||'').trim()){ nameEl?.classList.add('field-invalid'); nameEl?.focus(); invalid=true; }
 if(!String(f.species||'').trim()){ speciesEl?.classList.add('field-invalid'); if(!invalid) speciesEl?.focus(); invalid=true; }
-if(invalid){ try{toast('Укажите имя и вид животного','warn')}catch{alert('Укажите имя и вид животного')}; return; }
+if(invalid){ try{toast('Укажите имя и вид животного','warn')}catch{uiNotify('Укажите имя и вид животного','warn')}; return; }
 const role=state.user?.effective_role||state.user?.role||'';
 if(!['admin','owner','keeper'].includes(role)){
-  try{toast('Создавать животных может владелец (demo.owner@mostik.local)','warn')}catch{alert('Нужна роль владельца или кипера')};
+  try{toast('Создавать животных может владелец (demo.owner@mostik.local)','warn')}catch{uiNotify('Нужна роль владельца или кипера','warn')};
   return;
 }
 for(let i=1;i<=ai;i++){const t=f[`attention_title_${i}`];if(t)attention.push({category:f[`attention_category_${i}`],title:t})}const mode=(f.avatar_mode||'icon');
@@ -2043,7 +2188,7 @@ state.animals=(await api('animals')).animals;
 state.animal=state.animals.find(x=>x.id===newId)||state.animals.find(x=>x.name===payload.name)||null;
 if(!state.animal) throw new Error('Животное создано на сервере, но не вернулось в список. Обновите страницу и проверьте доступ.');
 state.skills=state.animal?(await api(`animals/${state.animal.id}/skills`)).skills:[];
-close();render();try{toast('Животное «'+(payload.name||'')+'» создано','ok')}catch{};try{updateNavBadges()}catch{}}catch(x){try{toast(x.message||'Не удалось создать животное','warn')}catch{alert(x.message)}}};
+close();render();try{toast('Животное «'+(payload.name||'')+'» создано','ok')}catch{};try{updateNavBadges()}catch{}}catch(x){try{toast(x.message||'Не удалось создать животное','warn')}catch{uiNotify(x.message,'err')}}};
 modal.querySelector('#createAnimalSubmit')?.addEventListener('click',e=>submitAnimalCreate(e));
 modal.querySelector('#animalAdd')?.addEventListener('submit',e=>{e.preventDefault(); submitAnimalCreate(e);});
 }
@@ -2070,7 +2215,7 @@ async function editAnimalProfile(a,after){
  wrap.querySelector('#animalProfileClose').onclick=close;wrap.querySelector('#animalProfileCancel').onclick=close;wrap.addEventListener('click',e=>{if(e.target===wrap)close()});
  const preview=()=>{const p=wrap.querySelector('#animalProfilePhotoPreview');p.innerHTML=photoData?`<img src="${photoData}" alt="">`:photoMarkup({...a,photo_data:null},'profile-photo')};
  wrap.querySelector('#chooseAnimalPhoto').onclick=()=>{wrap.querySelector('#animalProfilePhoto')?.click()};
- wrap.querySelector('#animalProfilePhoto').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{photoData=await fileToCompressedDataUrl(f);photoAction='set';preview()}catch(err){alert(err.message)}};
+ wrap.querySelector('#animalProfilePhoto').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{photoData=await fileToCompressedDataUrl(f);photoAction='set';preview()}catch(err){uiNotify(err.message,'err')}};
  wrap.querySelector('#deleteAnimalPhoto').onclick=()=>{photoData='';photoAction='delete';preview()};
  wrap.querySelector('#clearMicrochip').onclick=()=>{wrap.querySelector('[name="microchip"]').value=''};
  function renderAtt(){wrap.querySelector('#profileAttentionFields').innerHTML=attention.map((x,i)=>`<div class="formgrid attention-row" data-i="${i}"><label>Категория<input data-a="category" value="${esc(x.category)}"></label><label>Особенность<input data-a="title" value="${esc(x.title)}"></label><button type="button" class="danger remove-profile-attention" data-i="${i}">Удалить</button></div>`).join('')||'<p class="muted">Нет дополнительных особенностей.</p>';wrap.querySelectorAll('.remove-profile-attention').forEach(b=>b.onclick=()=>{attention.splice(Number(b.dataset.i),1);renderAtt()});}
@@ -2087,7 +2232,7 @@ async function editAnimalProfile(a,after){
      state.animals=(await api('animals')).animals;
      if(state.animal?.id===a.id)state.animal=state.animals.find(x=>x.id===a.id)||state.animal;
      close();if(after)after();
-   }catch(err){alert(err.message)}
+   }catch(err){uiNotify(err.message,'err')}
  };
  renderAtt();
 }
@@ -2100,7 +2245,7 @@ function skills(c){
    document.querySelector('#allSkills').innerHTML=rows.map(r=>{const mastered=r.skills.filter(x=>x.mastered).length;return `<article class="card"><div class="top"><div><h3><span class="ui-emoji" aria-hidden="true">◆</span> ${esc(r.animal.name)}</h3><p class="muted">${esc(r.animal.species||'')}${r.animal.breed?' · '+esc(r.animal.breed):''}</p></div><span class="badge ${mastered===r.skills.length&&r.skills.length?'ok':'pending'}">${mastered}/${r.skills.length} освоено</span></div>${r.skills.length?`<div class="skill-summary">${r.skills.map(x=>`<div class="summary-row"><span>${esc(x.name)}</span><span class="badge ${x.mastered?'ok':'pending'}">${x.mastered?'Освоен':'В работе'}</span></div>`).join('')}</div>`:'<p class="muted">Навыки ещё не добавлены.</p>'}</article>`}).join('')||'<p class="muted">Животных нет.</p>';
   }); return;
  }
- if(!state.animal){c.innerHTML='<div class="card">Нет доступного животного.</div>';return}const r=state.user.effective_role;const canEdit=['admin','trainer'].includes(r);const mastered=state.skills.filter(s=>s.mastered).length;c.innerHTML=`<div class="card"><div class="top"><div><h2>Навыки · ${esc(state.animal.name)}</h2><p class="muted">Освоено ${mastered} из ${state.skills.length}</p></div>${canEdit?'<button id="newSkill">+ Добавить навык</button>':''}</div><div class="skill-summary">${state.skills.map(s=>`<article class="skill"><div class="top"><div><h3>${esc(s.name)}</h3><p>${esc(s.goal||'')}</p><small>Сигнал: ${esc(s.signal||'—')} · ${s.steps.length} шагов</small></div><button type="button" class="secondary train-skill" data-skill="${s.id}">▶ Тренировать</button>${canEdit?`<label class="mastered-toggle"><input type="checkbox" data-skill="${s.id}" ${s.mastered?'checked':''}> Освоен</label>`:`<span class="badge ${s.mastered?'ok':'pending'}">${s.mastered?'Освоен':'В работе'}</span>`}</div><details><summary>Шаги</summary>${s.steps.map(x=>`<div class="step"><b>${x.step_no}. ${esc(x.title)}</b><div>Цель: ${esc(x.goal)} · Критерий: ${esc(x.criterion)}</div><div>Мостик: ${esc(x.bridge)} · Подкрепление: ${esc(x.reinforcement)}${x.reinforcement_other?' — '+esc(x.reinforcement_other):''} · График: ${esc(x.reinforcement_schedule)}</div></div>`).join('')}</details></article>`).join('')||'<p class="muted">Список навыков пока пуст.</p>'}</div></div>`;document.querySelector('#newSkill')?.addEventListener('click',()=>skillForm(c));document.querySelectorAll('.train-skill').forEach(x=>x.onclick=()=>{state.selected=[x.dataset.skill];view('training')});document.querySelectorAll('.mastered-toggle input').forEach(x=>x.onchange=async()=>{try{await api(`animals/${state.animal.id}/skills/${x.dataset.skill}`,{method:'PUT',body:JSON.stringify({mastered:x.checked})});const q=await api(`animals/${state.animal.id}/skills`);state.skills=q.skills;skills(c)}catch(e){x.checked=!x.checked;alert(e.message)}})}
+ if(!state.animal){c.innerHTML='<div class="card">Нет доступного животного.</div>';return}const r=state.user.effective_role;const canEdit=['admin','trainer'].includes(r);const mastered=state.skills.filter(s=>s.mastered).length;c.innerHTML=`<div class="card"><div class="top"><div><h2>Навыки · ${esc(state.animal.name)}</h2><p class="muted">Освоено ${mastered} из ${state.skills.length}</p></div>${canEdit?'<button id="newSkill">+ Добавить навык</button>':''}</div><div class="skill-summary">${state.skills.map(s=>`<article class="skill"><div class="top"><div><h3>${esc(s.name)}</h3><p>${esc(s.goal||'')}</p><small>Сигнал: ${esc(s.signal||'—')} · ${s.steps.length} шагов</small></div><button type="button" class="secondary train-skill" data-skill="${s.id}">▶ Тренировать</button>${canEdit?`<label class="mastered-toggle"><input type="checkbox" data-skill="${s.id}" ${s.mastered?'checked':''}> Освоен</label>`:`<span class="badge ${s.mastered?'ok':'pending'}">${s.mastered?'Освоен':'В работе'}</span>`}</div><details><summary>Шаги</summary>${s.steps.map(x=>`<div class="step"><b>${x.step_no}. ${esc(x.title)}</b><div>Цель: ${esc(x.goal)} · Критерий: ${esc(x.criterion)}</div><div>Мостик: ${esc(x.bridge)} · Подкрепление: ${esc(x.reinforcement)}${x.reinforcement_other?' — '+esc(x.reinforcement_other):''} · График: ${esc(x.reinforcement_schedule)}</div></div>`).join('')}</details></article>`).join('')||'<p class="muted">Список навыков пока пуст.</p>'}</div></div>`;document.querySelector('#newSkill')?.addEventListener('click',()=>skillForm(c));document.querySelectorAll('.train-skill').forEach(x=>x.onclick=()=>{state.selected=[x.dataset.skill];view('training')});document.querySelectorAll('.mastered-toggle input').forEach(x=>x.onchange=async()=>{try{await api(`animals/${state.animal.id}/skills/${x.dataset.skill}`,{method:'PUT',body:JSON.stringify({mastered:x.checked})});const q=await api(`animals/${state.animal.id}/skills`);state.skills=q.skills;skills(c)}catch(e){x.checked=!x.checked;uiNotify(e.message,'err')}})}
 function skillForm(c){c.innerHTML=`<div class="card"><h2>Новый навык</h2><form id="skillForm"><label>Название навыка<input name="name" placeholder="Название навыка" required></label><label>Сигнал<input name="signal" placeholder="Сигнал"></label><label>Общая цель<textarea name="goal" placeholder="Общая цель"></textarea></label><div id="steps"></div><button type="button" id="addStep">+ Добавить шаг</button><button>Сохранить навык</button></form></div>`;let n=0;const add=()=>{const prev=n;n++;const d=document.createElement('div');d.className='step edit';const copy=prev>0?{title:document.querySelector(`[name=st_title_${prev}]`)?.value||'',goal:document.querySelector(`[name=st_goal_${prev}]`)?.value||'',criterion:document.querySelector(`[name=st_criterion_${prev}]`)?.value||'',bridge:document.querySelector(`[name=st_bridge_${prev}]`)?.value||'нет',reinf:document.querySelector(`[name=st_reinf_${prev}]`)?.value||'пищевое',other:document.querySelector(`[name=st_other_${prev}]`)?.value||'',sched:document.querySelector(`[name=st_sched_${prev}]`)?.value||'постоянный'}:{title:'',goal:'',criterion:'',bridge:'нет',reinf:'пищевое',other:'',sched:'постоянный'};d.innerHTML=`<h3>Шаг ${n}${prev?` <small class="muted">(скопирован с шага ${prev})</small>`:''}</h3><input name="st_title_${n}" placeholder="Название шага" value="${esc(copy.title)}"><input name="st_goal_${n}" placeholder="Цель" value="${esc(copy.goal)}"><input name="st_criterion_${n}" placeholder="Критерий" value="${esc(copy.criterion)}"><label>Мостик<select name="st_bridge_${n}"><option ${copy.bridge==='кликер'?'selected':''}>кликер</option><option ${copy.bridge==='звук'?'selected':''}>звук</option><option ${copy.bridge==='жест'?'selected':''}>жест</option><option ${copy.bridge==='нет'?'selected':''}>нет</option></select></label><label>Подкрепление<select name="st_reinf_${n}"><option ${copy.reinf==='пищевое'?'selected':''}>пищевое</option><option ${copy.reinf==='игровое'?'selected':''}>игровое</option><option ${copy.reinf==='тактильное'?'selected':''}>тактильное</option><option ${copy.reinf==='другое'?'selected':''}>другое</option></select></label><label>Другое подкрепление<input name="st_other_${n}" placeholder="Укажите другое" value="${esc(copy.other)}"></label><label>График подкрепления<select name="st_sched_${n}"><option ${copy.sched==='постоянный'?'selected':''}>постоянный</option><option ${copy.sched==='переменный'?'selected':''}>переменный</option><option ${copy.sched==='джекпот'?'selected':''}>джекпот</option></select></label>`;document.querySelector('#steps').append(d)};add();document.querySelector('#addStep').onclick=add;document.querySelector('#skillForm').onsubmit=async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target)),steps=[];for(let i=1;i<=n;i++)steps.push({title:f[`st_title_${i}`],goal:f[`st_goal_${i}`],criterion:f[`st_criterion_${i}`],bridge:f[`st_bridge_${i}`],reinforcement:f[`st_reinf_${i}`],reinforcement_other:f[`st_other_${i}`],reinforcement_schedule:f[`st_sched_${i}`]});await api(`animals/${state.animal.id}/skills`,{method:'POST',body:JSON.stringify({name:f.name,signal:f.signal,goal:f.goal,steps})});state.skills=(await api(`animals/${state.animal.id}/skills`)).skills;view('skills')}}
 /** Тренировка: выбор навыков, таймер сессии, шаги навыков во время сессии, ДЗ. */
 
@@ -2131,7 +2276,7 @@ function loadActiveSession(){
 }
 
 function training(c){if(!state.animals.length){c.innerHTML=`<div class="card empty-state empty-hero"><div class="empty-icon">🎯</div><h3>Тренировки</h3><p class="muted">Добавьте животное — здесь появятся домашние задания, история сессий и шаблоны тренировок.</p><div class="empty-actions"><button type="button" class="primary" id="goAnimalsFromTraining">К животным</button></div></div>`;document.querySelector('#goAnimalsFromTraining')?.addEventListener('click',()=>view('animals'));return}
- if(isAllAnimals()){c.innerHTML=`<div class="card"><h2>Тренировка · все животные</h2><p class="muted">История тренировок и домашние задания по всем животным.</p>${scopeToolbar()}<div id="allTraining"><p class="muted">Загружаю…</p></div></div>`;document.querySelector('#scopeSort')?.addEventListener('change',e=>{state.scopeSort=e.target.value;training(c)});Promise.all([api('sessions'),api('homework')]).then(([ss,hh])=>{const rows=sortRows(ss.sessions,'training');const hw=[...(hh.homework||[])].sort((a,b)=>new Date(b.updated_at||b.created_at||0)-new Date(a.updated_at||a.created_at||0));document.querySelector('#allTraining').innerHTML=`${rows.map(x=>`<article class="timeline"><b><span class="ui-emoji" aria-hidden="true">◆</span> ${esc(x.animal_name)} · ${fmtDate(x.started_at)}</b><span>${esc(x.author)} · ${x.duration_minutes||0} мин · успех ${x.success_score||'—'}/10</span><small>Концентрация: ${x.concentration||'—'}/5 · Возбудимость: ${x.arousal||'—'}/5</small><button type="button" class="secondary repeat-session" data-id="${x.id}">↻ Повторить тренировку</button>${(['admin','trainer','keeper'].includes(state.user.effective_role))?`<button type="button" class="danger delete-session" data-id="${x.id}">Удалить</button>`:''}</article>`).join('')||'<p class="muted">Тренировок пока нет.</p>'}<hr><h3>Домашние задания</h3>${hw.map(x=>`<article class="timeline"><b><span class="ui-emoji" aria-hidden="true">◆</span> ${esc(x.animal_name)} · ${esc(x.title)}</b><small>${x.due_date?'Срок: '+esc(x.due_date):'Без срока'} · ${esc(x.trainer_name||'')}</small><p>${esc(x.instructions||'')}</p></article>`).join('')||'<p class="muted">Тренер пока не задал упражнений.</p>'}`;document.querySelectorAll('.repeat-session').forEach(b=>b.onclick=async()=>{try{const q=await api(`sessions/${encodeURIComponent(b.dataset.id)}`);state.animal=state.animals.find(a=>a.id===q.session.animal_id)||null;state.selected=q.skills.map(v=>v.skill_id);state.repeatTraining=q;state.skills=state.animal?(await api(`animals/${state.animal.id}/skills`)).skills:[];view('training')}catch(e){alert(e.message)}});document.querySelectorAll('.delete-session').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить тренировку?'))return;try{await api(`sessions/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});training(c)}catch(e){alert(e.message)}})}).catch(e=>document.querySelector('#allTraining').innerHTML=`<p class="error">${esc(e.message)}</p>`);return}
+ if(isAllAnimals()){c.innerHTML=`<div class="card"><h2>Тренировка · все животные</h2><p class="muted">История тренировок и домашние задания по всем животным.</p>${scopeToolbar()}<div id="allTraining"><p class="muted">Загружаю…</p></div></div>`;document.querySelector('#scopeSort')?.addEventListener('change',e=>{state.scopeSort=e.target.value;training(c)});Promise.all([api('sessions'),api('homework')]).then(([ss,hh])=>{const rows=sortRows(ss.sessions,'training');const hw=[...(hh.homework||[])].sort((a,b)=>new Date(b.updated_at||b.created_at||0)-new Date(a.updated_at||a.created_at||0));document.querySelector('#allTraining').innerHTML=`${rows.map(x=>`<article class="timeline"><b><span class="ui-emoji" aria-hidden="true">◆</span> ${esc(x.animal_name)} · ${fmtDate(x.started_at)}</b><span>${esc(x.author)} · ${x.duration_minutes||0} мин · успех ${x.success_score||'—'}/10</span><small>Концентрация: ${x.concentration||'—'}/5 · Возбудимость: ${x.arousal||'—'}/5</small><button type="button" class="secondary repeat-session" data-id="${x.id}">↻ Повторить тренировку</button>${(['admin','trainer','keeper'].includes(state.user.effective_role))?`<button type="button" class="danger delete-session" data-id="${x.id}">Удалить</button>`:''}</article>`).join('')||'<p class="muted">Тренировок пока нет.</p>'}<hr><h3>Домашние задания</h3>${hw.map(x=>`<article class="timeline"><b><span class="ui-emoji" aria-hidden="true">◆</span> ${esc(x.animal_name)} · ${esc(x.title)}</b><small>${x.due_date?'Срок: '+esc(x.due_date):'Без срока'} · ${esc(x.trainer_name||'')}</small><p>${esc(x.instructions||'')}</p></article>`).join('')||'<p class="muted">Тренер пока не задал упражнений.</p>'}`;document.querySelectorAll('.repeat-session').forEach(b=>b.onclick=async()=>{try{const q=await api(`sessions/${encodeURIComponent(b.dataset.id)}`);state.animal=state.animals.find(a=>a.id===q.session.animal_id)||null;state.selected=q.skills.map(v=>v.skill_id);state.repeatTraining=q;state.skills=state.animal?(await api(`animals/${state.animal.id}/skills`)).skills:[];view('training')}catch(e){uiNotify(e.message,'err')}});document.querySelectorAll('.delete-session').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить тренировку?')))return;try{await api(`sessions/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});training(c)}catch(e){uiNotify(e.message,'err')}})}).catch(e=>document.querySelector('#allTraining').innerHTML=`<p class="error">${esc(e.message)}</p>`);return}
 
  if(!state.animal){c.innerHTML='<div class="card">Нет доступного животного.</div>';return}
  const r=state.user.effective_role;
@@ -2251,28 +2396,28 @@ function loadTrainingReadOnly(c){Promise.all([api(`homework?animal_id=${encodeUR
     try{
       await api(`homework/${encodeURIComponent(b.dataset.id)}/complete`,{method:'POST',body:JSON.stringify({})});
       training(c);
-    }catch(e){alert(e.message)}
+    }catch(e){uiNotify(e.message,'err')}
   });
-  document.querySelectorAll('.hw-start').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.hw-start').forEach(b=>b.onclick=async()=>{
     const skillId=b.dataset.skill;
     if(skillId) state.selected=[skillId];
     state.repeatTraining=null;
     state.activeHomeworkId=b.dataset.id;
     // Owners normally can't run full training UI — open a lightweight practice note
     if(['owner','vet'].includes(state.user.effective_role)){
-      const note=prompt('Кратко опишите, как прошло выполнение ДЗ (необязательно):','');
+      const note=await uiPrompt('Отметить ДЗ выполненным',{label:'Как прошло выполнение (необязательно)',multiline:true,submit:'Отметить выполненным'}); if(note===null) return;
       (async()=>{
         try{
           await api(`homework/${encodeURIComponent(b.dataset.id)}/complete`,{method:'POST',body:JSON.stringify({note:note||''})});
           toast('ДЗ отмечено');
           training(c);
-        }catch(e){alert(e.message)}
+        }catch(e){uiNotify(e.message,'err')}
       })();
       return;
     }
     view('training');
   });
-document.querySelectorAll('[data-repeat-session]').forEach(b=>b.onclick=async()=>{try{const d=await api(`sessions/${encodeURIComponent(b.dataset.repeatSession)}`);state.selected=d.skills.map(x=>x.skill_id);state.repeatTraining=d;view('training')}catch(e){alert(e.message)}});document.querySelectorAll('.delete-session').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить тренировку?'))return;try{await api(`sessions/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});training(c)}catch(e){alert(e.message)}})}).catch(x=>c.innerHTML+=`<div class="card error">${esc(x.message)}</div>`)}
+document.querySelectorAll('[data-repeat-session]').forEach(b=>b.onclick=async()=>{try{const d=await api(`sessions/${encodeURIComponent(b.dataset.repeatSession)}`);state.selected=d.skills.map(x=>x.skill_id);state.repeatTraining=d;view('training')}catch(e){uiNotify(e.message,'err')}});document.querySelectorAll('.delete-session').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить тренировку?')))return;try{await api(`sessions/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});training(c)}catch(e){uiNotify(e.message,'err')}})}).catch(x=>c.innerHTML+=`<div class="card error">${esc(x.message)}</div>`)}
 function finishForm(){
  const f=document.querySelector('#finishForm');
  const canHomework=['trainer','admin'].includes(state.user.effective_role);
@@ -2299,7 +2444,7 @@ function finishForm(){
  document.querySelector('#finishData').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));const ended=new Date();const skills=state.selected.map(id=>({skill_id:id,repetitions:Number(b[`rep_${id}`]||0)}));
  try{await api('sessions',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id,started_at:state.started.toISOString(),ended_at:ended.toISOString(),duration_minutes:Number(b.duration_minutes),success_score:Number(b.success_score),concentration:Number(b.concentration),arousal:Number(b.arousal),skills})});
  if(canHomework && b.make_homework==='on'){await api('homework',{method:'POST',body:JSON.stringify({animal_id:state.animal.id,skill_id:state.selected[0]||'',title:b.hw_title,instructions:b.hw_instructions,due_date:b.hw_due_date||null,status:'active'})})}
- clearActiveSession(); try{toast(canHomework&&b.make_homework==='on'?'Тренировка и ДЗ сохранены':'Тренировка сохранена','ok')}catch{alert('Сохранено')};state.selected=[];state.repeatTraining=null;view('training')}catch(err){alert(err.message)}}
+ clearActiveSession(); try{toast(canHomework&&b.make_homework==='on'?'Тренировка и ДЗ сохранены':'Тренировка сохранена','ok')}catch{uiNotify('Сохранено','ok')};state.selected=[];state.repeatTraining=null;view('training')}catch(err){uiNotify(err.message,'err')}}
 }
 function homeworkEditor(c){if(!['trainer','admin'].includes(state.user.effective_role))return;api(`homework?animal_id=${encodeURIComponent(state.animal.id)}`).then(d=>{state.homework=d.homework;c.innerHTML=`<div class="card"><h2>Домашнее задание</h2><form id="hwForm"><label>Навык<select name="skill_id"><option value="">Без привязки к навыку</option>${state.skills.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label><label>Название задания<input name="title" placeholder="Название задания" required></label><label>Инструкции<textarea name="instructions" placeholder="Что владелец делает дома" required></textarea></label><label>Срок выполнения<input name="due_date" type="date"></label><button>Добавить задание</button></form><div>${state.homework.map(x=>`<article class="timeline"><b>${esc(x.title)}</b><p>${esc(x.instructions)}</p><small>${x.skill_name?`Навык: ${esc(x.skill_name)} · `:''}${x.due_date?`до ${esc(x.due_date)}`:''}</small><button class="edit-hw" data-id="${x.id}">Редактировать</button></article>`).join('')}</div></div>`;document.querySelector('#hwForm').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));await api('homework',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id})});training(c)};document.querySelectorAll('.edit-hw').forEach(btn=>btn.onclick=()=>{const x=state.homework.find(y=>y.id===btn.dataset.id);editHomework(c,x)})})}
 function editHomework(c,x){c.innerHTML=`<div class="card"><h2>Редактировать домашнее задание</h2><form id="hwEdit"><select name="skill_id"><option value="">Без привязки</option>${state.skills.map(s=>`<option value="${s.id}" ${s.id===x.skill_id?'selected':''}>${esc(s.name)}</option>`).join('')}</select><input name="title" value="${esc(x.title)}" required><textarea name="instructions" required>${esc(x.instructions)}</textarea><input name="due_date" type="date" value="${esc(x.due_date||'')}"><select name="status"><option value="active" ${x.status==='active'?'selected':''}>Активно</option><option value="done" ${x.status==='done'?'selected':''}>Завершено</option></select><button>Сохранить изменения</button></form></div>`;document.querySelector('#hwEdit').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));await api('homework',{method:'PUT',body:JSON.stringify({...b,id:x.id,animal_id:state.animal.id})});training(c)}}
@@ -2312,9 +2457,9 @@ function trainingTemplates(c){
   c.innerHTML=`<div class="card"><div class="top"><div><h2>Шаблоны тренировок</h2><p class="muted">Готовые наборы навыков и длительность — можно применить при начале тренировки.${hasAnimal?'':' Выберите животное, чтобы создать новый шаблон из его навыков.'}</p></div></div>
   ${hasAnimal?`<form id="templateForm" class="formgrid"><label>Название<input name="name" placeholder="Например: Базовая разминка" required></label><label>Длительность (мин)<input name="duration_minutes" type="number" min="1" value="15" required></label><label style="grid-column:1/-1">Описание<textarea name="description" placeholder="Необязательно"></textarea></label><div style="grid-column:1/-1"><p class="muted">Навыки животного «${esc(state.animal.name)}»</p>${state.skills.length?state.skills.map(s=>`<label class="check"><input type="checkbox" name="skill_ids" value="${s.id}"> ${esc(s.name)}</label>`).join(''):'<p class="muted">У этого животного пока нет навыков.</p>'}</div><button style="grid-column:1/-1">Сохранить шаблон</button></form>`:''}
   <div id="templatesList">${state.trainingTemplates.length?state.trainingTemplates.map(t=>`<article class="timeline"><b>${esc(t.name)}</b><small>${esc(t.duration_minutes)} мин${(t.skill_names||[]).length?' · '+t.skill_names.map(esc).join(', '):''}</small>${t.description?`<p>${esc(t.description)}</p>`:''}${hasAnimal?`<button type="button" class="secondary use-template" data-id="${t.id}">Применить к текущей тренировке</button>`:''}<button type="button" class="danger delete-template" data-id="${t.id}">Удалить</button></article>`).join(''):'<p class="muted">Шаблонов пока нет.</p>'}</div></div>`;
-  document.querySelector('#templateForm')?.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(e.target);const skill_ids=fd.getAll('skill_ids');try{await api('training-templates',{method:'POST',body:JSON.stringify({name:fd.get('name'),description:fd.get('description'),duration_minutes:Number(fd.get('duration_minutes')||15),skill_ids})});trainingTemplates(c)}catch(err){alert(err.message)}});
-  document.querySelectorAll('.delete-template').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить шаблон?'))return;try{await api(`training-templates/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});trainingTemplates(c)}catch(err){alert(err.message)}});
-  document.querySelectorAll('.use-template').forEach(b=>b.onclick=()=>{const t=state.trainingTemplates.find(x=>x.id===b.dataset.id);if(!t||!state.animal)return;const ids=(t.skill_ids||[]).filter(id=>state.skills.some(s=>s.id===id));if(!ids.length){alert('У выбранного животного нет навыков из этого шаблона.');return}state.selected=ids;view('training')});
+  document.querySelector('#templateForm')?.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(e.target);const skill_ids=fd.getAll('skill_ids');try{await api('training-templates',{method:'POST',body:JSON.stringify({name:fd.get('name'),description:fd.get('description'),duration_minutes:Number(fd.get('duration_minutes')||15),skill_ids})});trainingTemplates(c)}catch(err){uiNotify(err.message,'err')}});
+  document.querySelectorAll('.delete-template').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить шаблон?')))return;try{await api(`training-templates/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});trainingTemplates(c)}catch(err){uiNotify(err.message,'err')}});
+  document.querySelectorAll('.use-template').forEach(b=>b.onclick=()=>{const t=state.trainingTemplates.find(x=>x.id===b.dataset.id);if(!t||!state.animal)return;const ids=(t.skill_ids||[]).filter(id=>state.skills.some(s=>s.id===id));if(!ids.length){uiNotify('У выбранного животного нет навыков из этого шаблона.','warn');return}state.selected=ids;view('training')});
  }).catch(e=>c.innerHTML=`<div class="card error">${esc(e.message)}</div>`);
 }
 function observations(c){
@@ -2380,10 +2525,10 @@ function observations(c){
  const fillForm=(x)=>{if(!form)return;for(const k of ['behavior_category','behavior_action','state_signs','interaction_target','behavior_note','health_note','note'])if(form.elements[k])form.elements[k].value=x[k]??'';for(const k of ['activity','arousal','stress','concentration','appetite','pain','sleep'])if(form.elements[k])form.elements[k].value=x[k]??'';form.elements.id.value=x.id;form.elements.observed_at.value=new Date(new Date(x.observed_at).getTime()-new Date(x.observed_at).getTimezoneOffset()*60000).toISOString().slice(0,16);document.querySelector('#obsSubmit').textContent='Сохранить изменения';document.querySelector('#obsCancelEdit').hidden=false;form.scrollIntoView({behavior:'smooth',block:'start'})};
  const renderList=(rows)=>{state.observations=rows;document.querySelector('#obsList').innerHTML=`<h3>Лента наблюдений за поведением</h3>${rows.map(x=>`<article class="timeline"><b>${fmtDate(x.observed_at)} · ${esc(x.author)}</b>${(x.behavior_category||x.behavior_action||x.state_signs||x.interaction_target)?`<div class="chips">${x.behavior_category?`<span>${esc(x.behavior_category)}</span>`:''}${x.behavior_action?`<span>${esc(x.behavior_action)}</span>`:''}${x.state_signs?`<span>${esc(x.state_signs)}</span>`:''}${x.interaction_target?`<span>Объект: ${esc(x.interaction_target)}</span>`:''}</div>`:''}${x.behavior_note?`<p><strong>Поведение:</strong> ${esc(x.behavior_note)}</p>`:''}<div class="chips">${x.activity?`Активность ${x.activity}/5`:''} ${x.arousal?`Возбудимость ${x.arousal}/5`:''} ${x.stress?`Стресс ${x.stress}/5`:''} ${x.concentration?`Концентрация ${x.concentration}/5`:''}</div>${x.health_note?`<p><strong>Здоровье:</strong> ${esc(x.health_note)}</p>`:''}<div class="chips">${x.appetite?`Аппетит ${x.appetite}/5`:''} ${x.pain?`Боль ${x.pain}/5`:''} ${x.sleep?`Сон ${x.sleep}/5`:''}</div>${x.note?`<p>${esc(x.note)}</p>`:''}${canWrite?`<div class="actions"><button type="button" class="secondary edit-observation" data-id="${esc(x.id)}">Редактировать</button><button type="button" class="danger delete-observation" data-id="${esc(x.id)}">Удалить</button></div>`:''}</article>`).join('')||'<p class="muted">Наблюдений пока нет.</p>'}`;
   document.querySelectorAll('.edit-observation').forEach(b=>b.onclick=()=>fillForm(rows.find(x=>x.id===b.dataset.id)||{}));
-  document.querySelectorAll('.delete-observation').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить наблюдение?'))return;try{await api(`observations/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});toast('Наблюдение за поведением удалено');resetForm();loadList()}catch(e){alert(e.message)}});
+  document.querySelectorAll('.delete-observation').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить наблюдение?')))return;try{await api(`observations/${encodeURIComponent(b.dataset.id)}`,{method:'DELETE'});toast('Наблюдение за поведением удалено');resetForm();loadList()}catch(e){uiNotify(e.message,'err')}});
  };
  const loadList=()=>api(`observations?animal_id=${encodeURIComponent(state.animal.id)}`).then(d=>renderList(d.observations||[])).catch(x=>document.querySelector('#obsList').innerHTML=`<p class="error">${esc(x.message)}</p>`);
- form?.addEventListener('submit',async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));for(const k of ['activity','arousal','stress','concentration','appetite','pain','sleep'])b[k]=b[k]?Number(b[k]):null;try{const editing=!!b.id;await api(editing?`observations/${encodeURIComponent(b.id)}`:'observations',{method:editing?'PUT':'POST',body:JSON.stringify({...b,animal_id:state.animal.id,observed_at:new Date(b.observed_at).toISOString()})});toast(editing?'Наблюдение за поведением обновлено':'Наблюдение за поведением сохранено');resetForm();loadList();if(typeof analytics==='function'&&state.analyticsAnimalId===state.animal.id){} }catch(err){alert(err.message)}});
+ form?.addEventListener('submit',async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));for(const k of ['activity','arousal','stress','concentration','appetite','pain','sleep'])b[k]=b[k]?Number(b[k]):null;try{const editing=!!b.id;await api(editing?`observations/${encodeURIComponent(b.id)}`:'observations',{method:editing?'PUT':'POST',body:JSON.stringify({...b,animal_id:state.animal.id,observed_at:new Date(b.observed_at).toISOString()})});toast(editing?'Наблюдение за поведением обновлено':'Наблюдение за поведением сохранено');resetForm();loadList();if(typeof analytics==='function'&&state.analyticsAnimalId===state.animal.id){} }catch(err){uiNotify(err.message,'err')}});
  document.querySelector('#obsCancelEdit')?.addEventListener('click',resetForm);
  loadList();
 }
@@ -2443,7 +2588,7 @@ function calendar(c){if(!state.animals.length){c.innerHTML=`<div class="card emp
      document.querySelector('#calJumpToday').onclick=()=>{cursor=new Date();cursor.setDate(1);selectedKey=isoDay(new Date());render()};
      document.querySelectorAll('.calendar-day').forEach(b=>b.onclick=()=>{selectedKey=b.dataset.day;const d=new Date(`${selectedKey}T12:00:00`);if(d.getMonth()!==cursor.getMonth())cursor=new Date(d.getFullYear(),d.getMonth(),1);render()});
      document.querySelectorAll('.edit-schedule').forEach(b=>b.onclick=()=>{const x=state.schedule.find(y=>y.id===b.dataset.id);scheduleForm(c,x)});
-     document.querySelectorAll('.complete-schedule').forEach(b=>b.onclick=async()=>{try{await api(`schedule/${b.dataset.id}/complete`,{method:'POST',body:JSON.stringify({occurrence_at:b.dataset.occurrence})});toast('Отмечено выполненным');calendar(c)}catch(e){alert(e.message)}});document.querySelectorAll('.delete-schedule').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить запланированное событие?'))return;try{await api('schedule',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});calendar(c)}catch(e){alert(e.message)}});;document.querySelectorAll('[data-calendar-reminder]').forEach(b=>b.onclick=()=>view('reminders'));document.querySelector('#goReminders')?.addEventListener('click',()=>view('reminders'));
+     document.querySelectorAll('.complete-schedule').forEach(b=>b.onclick=async()=>{try{await api(`schedule/${b.dataset.id}/complete`,{method:'POST',body:JSON.stringify({occurrence_at:b.dataset.occurrence})});toast('Отмечено выполненным');calendar(c)}catch(e){uiNotify(e.message,'err')}});document.querySelectorAll('.delete-schedule').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить запланированное событие?')))return;try{await api('schedule',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});calendar(c)}catch(e){uiNotify(e.message,'err')}});;document.querySelectorAll('[data-calendar-reminder]').forEach(b=>b.onclick=()=>view('reminders'));document.querySelector('#goReminders')?.addEventListener('click',()=>view('reminders'));
    }
    render();
  }).catch(e=>c.innerHTML=`<div class="card error">${esc(e.message)}</div>`)
@@ -2502,7 +2647,7 @@ function scheduleForm(c,x={}){
  wrap.addEventListener('click',e=>{if(e.target===wrap)closeModal()});
  document.querySelector('#cancelSchedule').onclick=closeModal;
  document.querySelector('#cancelSchedule2').onclick=closeModal;
- document.querySelector('#scheduleEditForm').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.scheduled_at=new Date(b.scheduled_at).toISOString();b.animal_id=state.animal.id;if(x.id)b.id=x.id;try{await api('schedule',{method:x.id?'PUT':'POST',body:JSON.stringify(b)});document.querySelector('#scheduleModal')?.remove();toast('Событие в календаре');calendar(c)}catch(err){alert(err.message)}};
+ document.querySelector('#scheduleEditForm').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));b.scheduled_at=new Date(b.scheduled_at).toISOString();b.animal_id=state.animal.id;if(x.id)b.id=x.id;try{await api('schedule',{method:x.id?'PUT':'POST',body:JSON.stringify(b)});document.querySelector('#scheduleModal')?.remove();toast('Событие в календаре');calendar(c)}catch(err){uiNotify(err.message,'err')}};
 }
 
 async function runAnimalCompare(period){
@@ -2815,7 +2960,7 @@ bindQuickNav(c);
     await api('vet',{method:'POST',body:JSON.stringify({animal_id:state.animal.id,record_type:'note',note:b.note})});
     toast('Заметка сохранена');
     vet(c);
-  }catch(err){alert(err.message)}
+  }catch(err){uiNotify(err.message,'err')}
  });
  const toggleVetType=()=>{
   if(!form) return;
@@ -2830,8 +2975,8 @@ bindQuickNav(c);
  form?.elements?.record_type?.addEventListener('change',toggleVetType);
  if(form) toggleVetType();
  const startEl=form?.elements?.start_date,endEl=form?.elements?.end_date,periodEl=form?.elements?.period_preset; const recalcPeriod=()=>{if(!startEl||!endEl||!periodEl||periodEl.value==='custom')return; const d=new Date(startEl.value+'T00:00:00'); if(isNaN(d))return; const v=periodEl.value;if(v==='1d')d.setDate(d.getDate());else if(v==='3d')d.setDate(d.getDate()+2);else if(v==='7d')d.setDate(d.getDate()+6);else if(v==='1m')d.setMonth(d.getMonth()+1);else if(v==='3m')d.setMonth(d.getMonth()+3);else if(v==='6m')d.setMonth(d.getMonth()+6);else if(v==='1y')d.setFullYear(d.getFullYear()+1);else if(v==='xm')d.setMonth(d.getMonth()+Math.max(1,Number(form.elements.period_months.value||1))); endEl.value=d.toISOString().slice(0,10)}; periodEl?.addEventListener('change',()=>{document.querySelector('#vetMonthsWrap').hidden=periodEl.value!=='xm';recalcPeriod()}); startEl?.addEventListener('change',recalcPeriod); form?.elements?.period_months?.addEventListener('input',recalcPeriod);
- form?.addEventListener('submit',async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));try{if(b.record_type==='note'){await api('vet',{method:'POST',body:JSON.stringify({animal_id:state.animal.id,record_type:'note',note:[b.complaint,b.note].filter(Boolean).join('\n'),pain:b.pain?Number(b.pain):null,appetite:b.appetite?Number(b.appetite):null,sleep:b.sleep?Number(b.sleep):null})})}else{b.animal_id=state.animal.id;b.times=b.times.split(',').map(x=>x.trim()).filter(Boolean);const d=await api('medications',{method:'POST',body:JSON.stringify(b)});try{toast(`Назначение создано · выдач: ${d.administrations_created} · ${ (d.times||[]).join(', ')}`,'ok')}catch{alert(`Назначение создано. Создано выдач: ${d.administrations_created}`)}}vet(c)}catch(err){alert(err.message)}});
- api(`vet?animal_id=${encodeURIComponent(state.animal.id)}`).then(d=>{const rec=d.records;state.vet=rec;document.querySelector('#vetList').innerHTML=`<h3>История</h3>${rec.map(x=>`<article class="timeline"><b>${esc(x.medication_name||(x.record_type==='note'?'Состояние животного':'Назначение'))}</b><small>${fmtDate(x.updated_at)} · ${esc(x.vet_name)}</small>${x.dosage?`<p><strong>Дозировка:</strong> ${esc(x.dosage)}</p>`:''}${x.frequency?`<p><strong>Приём:</strong> ${esc(x.frequency)}</p>`:''}${x.start_date||x.end_date?`<p><strong>Период:</strong> ${esc(x.start_date||'—')} — ${esc(x.end_date||'—')}</p>`:''}${x.instructions?`<p>${esc(x.instructions)}</p>`:''}${x.record_type==='note'&&x.pain!=null?`<p><strong>Боль:</strong> ${esc(x.pain)}/5 · <strong>Аппетит:</strong> ${x.appetite==null?'—':esc(x.appetite)+'/5'} · <strong>Сон:</strong> ${x.sleep==null?'—':esc(x.sleep)+'/5'}</p>`:''}${x.complaint?`<p><strong>Проблема / жалоба:</strong> ${esc(x.complaint)}</p>`:''}${x.note?`<p class="muted">${esc(x.note)}</p>`:''}${canWrite?`<button class="edit-vet" data-id="${x.id}">Редактировать</button><button type="button" class="secondary repeat-btn" data-repeat="vet" data-id="${x.id}">↻ Повторить</button><button type="button" class="danger delete-vet" data-id="${x.id}">Удалить</button>`:''}</article>`).join('')||'<p class="muted">Записей пока нет.</p>'}`;document.querySelectorAll('.edit-vet').forEach(b=>b.onclick=()=>editVet(c,rec.find(x=>x.id===b.dataset.id)));document.querySelectorAll('.repeat-btn[data-repeat="vet"]').forEach(b=>b.onclick=()=>repeatRecord('vet',rec.find(x=>x.id===b.dataset.id)||{}));document.querySelectorAll('.delete-vet').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить ветеринарную запись?'))return;try{await api('vet',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});vet(c)}catch(e){alert(e.message)}})}).catch(x=>document.querySelector('#vetList').innerHTML=`<p class="error">${esc(x.message)}</p>`);
+ form?.addEventListener('submit',async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));try{if(b.record_type==='note'){await api('vet',{method:'POST',body:JSON.stringify({animal_id:state.animal.id,record_type:'note',note:[b.complaint,b.note].filter(Boolean).join('\n'),pain:b.pain?Number(b.pain):null,appetite:b.appetite?Number(b.appetite):null,sleep:b.sleep?Number(b.sleep):null})})}else{b.animal_id=state.animal.id;b.times=b.times.split(',').map(x=>x.trim()).filter(Boolean);const d=await api('medications',{method:'POST',body:JSON.stringify(b)});try{toast(`Назначение создано · выдач: ${d.administrations_created} · ${ (d.times||[]).join(', ')}`,'ok')}catch{uiNotify(`Назначение создано. Создано выдач: ${d.administrations_created}`,'ok')}}vet(c)}catch(err){uiNotify(err.message,'err')}});
+ api(`vet?animal_id=${encodeURIComponent(state.animal.id)}`).then(d=>{const rec=d.records;state.vet=rec;document.querySelector('#vetList').innerHTML=`<h3>История</h3>${rec.map(x=>`<article class="timeline"><b>${esc(x.medication_name||(x.record_type==='note'?'Состояние животного':'Назначение'))}</b><small>${fmtDate(x.updated_at)} · ${esc(x.vet_name)}</small>${x.dosage?`<p><strong>Дозировка:</strong> ${esc(x.dosage)}</p>`:''}${x.frequency?`<p><strong>Приём:</strong> ${esc(x.frequency)}</p>`:''}${x.start_date||x.end_date?`<p><strong>Период:</strong> ${esc(x.start_date||'—')} — ${esc(x.end_date||'—')}</p>`:''}${x.instructions?`<p>${esc(x.instructions)}</p>`:''}${x.record_type==='note'&&x.pain!=null?`<p><strong>Боль:</strong> ${esc(x.pain)}/5 · <strong>Аппетит:</strong> ${x.appetite==null?'—':esc(x.appetite)+'/5'} · <strong>Сон:</strong> ${x.sleep==null?'—':esc(x.sleep)+'/5'}</p>`:''}${x.complaint?`<p><strong>Проблема / жалоба:</strong> ${esc(x.complaint)}</p>`:''}${x.note?`<p class="muted">${esc(x.note)}</p>`:''}${canWrite?`<button class="edit-vet" data-id="${x.id}">Редактировать</button><button type="button" class="secondary repeat-btn" data-repeat="vet" data-id="${x.id}">↻ Повторить</button><button type="button" class="danger delete-vet" data-id="${x.id}">Удалить</button>`:''}</article>`).join('')||'<p class="muted">Записей пока нет.</p>'}`;document.querySelectorAll('.edit-vet').forEach(b=>b.onclick=()=>editVet(c,rec.find(x=>x.id===b.dataset.id)));document.querySelectorAll('.repeat-btn[data-repeat="vet"]').forEach(b=>b.onclick=()=>repeatRecord('vet',rec.find(x=>x.id===b.dataset.id)||{}));document.querySelectorAll('.delete-vet').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить ветеринарную запись?')))return;try{await api('vet',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});vet(c)}catch(e){uiNotify(e.message,'err')}})}).catch(x=>document.querySelector('#vetList').innerHTML=`<p class="error">${esc(x.message)}</p>`);
  api(`medications?animal_id=${encodeURIComponent(state.animal.id)}`).then(async d=>{
   const rows=d.prescriptions||[];
   const medBox=document.querySelector('#medicationList');
@@ -2874,12 +3019,12 @@ bindQuickNav(c);
   const refresh=()=>vet(document.querySelector('#content'));
   medBox.querySelectorAll('.med-give').forEach(b=>b.onclick=async()=>{
     try{ await api(`medications/${b.dataset.id}/administrations`,{method:'POST',body:JSON.stringify({status:'given'})}); try{toast('Препарат отмечен как выданный','ok')}catch{}; refresh(); }
-    catch(e){try{toast(e.message,'warn')}catch{alert(e.message)}}
+    catch(e){try{toast(e.message,'warn')}catch{uiNotify(e.message,'err')}}
   });
   medBox.querySelectorAll('.med-skip').forEach(b=>b.onclick=async()=>{
-    if(!confirm('Отметить пропуск этой дозы?')) return;
+    if(!(await uiConfirm('Отметить пропуск этой дозы?'))) return;
     try{ await api(`medications/${b.dataset.id}/administrations`,{method:'POST',body:JSON.stringify({status:'skipped',note:'Пропуск'})}); try{toast('Пропуск записан','ok')}catch{}; refresh(); }
-    catch(e){try{toast(e.message,'warn')}catch{alert(e.message)}}
+    catch(e){try{toast(e.message,'warn')}catch{uiNotify(e.message,'err')}}
   });
 }).catch(()=>{});
  renderVetAnalyses(canWrite);
@@ -2899,8 +3044,8 @@ function renderVetAnalyses(canWrite){
   box.innerHTML=`<h3><span class="ui-emoji" aria-hidden="true">🧪</span> Лабораторные анализы</h3>
   ${canWrite?`<form id="analysisForm" class="vet-form"><div class="formgrid"><label>Дата забора<input name="sample_date" type="date" value="${new Date().toISOString().slice(0,10)}" required></label><label>Название анализа<input name="analysis_name" placeholder="Например: Общий анализ крови" required></label><label>Показатель<input name="parameter" placeholder="Например: Гемоглобин" required></label></div><div class="formgrid"><label>Значение (число)<input name="value_numeric" type="number" step="any" placeholder="12.5"></label><label>Единицы<input name="unit" placeholder="г/л"></label><label>Статус<select name="status"><option value="normal">Норма</option><option value="high">Выше нормы</option><option value="low">Ниже нормы</option><option value="critical">Критично</option><option value="unknown" selected>Не указано</option></select></label></div><div class="formgrid"><label>Референс мин.<input name="reference_min" type="number" step="any"></label><label>Референс макс.<input name="reference_max" type="number" step="any"></label><label>Значение (текст)<input name="value_text" placeholder="Если не числовое"></label></div><label>Комментарий<textarea name="note" placeholder="Комментарий"></textarea></label><button>Добавить результат</button></form>`:''}
   <div id="vetAnalysesList">${state.vetAnalyses.map(x=>`<article class="timeline"><b>${esc(x.analysis_name)} · ${esc(x.parameter)}</b> ${vetAnalysisStatusBadge(x.status)}<small>${esc(x.sample_date)} · ${esc(x.vet_name)}</small><p>${x.value_numeric!=null?esc(x.value_numeric):esc(x.value_text||'—')}${x.unit?' '+esc(x.unit):''}${(x.reference_min!=null||x.reference_max!=null)?` (реф. ${x.reference_min??'—'}–${x.reference_max??'—'})`:''}</p>${x.note?`<p class="muted">${esc(x.note)}</p>`:''}${canWrite?`<button type="button" class="danger delete-analysis" data-id="${x.id}">Удалить</button>`:''}</article>`).join('')||'<p class="muted">Анализов пока нет.</p>'}</div>`;
-  document.querySelector('#analysisForm')?.addEventListener('submit',async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));try{await api('vet-analyses',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id})});renderVetAnalyses(canWrite)}catch(err){alert(err.message)}});
-  document.querySelectorAll('.delete-analysis').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить результат анализа?'))return;try{await api('vet-analyses',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});renderVetAnalyses(canWrite)}catch(err){alert(err.message)}});
+  document.querySelector('#analysisForm')?.addEventListener('submit',async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));try{await api('vet-analyses',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id})});renderVetAnalyses(canWrite)}catch(err){uiNotify(err.message,'err')}});
+  document.querySelectorAll('.delete-analysis').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить результат анализа?')))return;try{await api('vet-analyses',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});renderVetAnalyses(canWrite)}catch(err){uiNotify(err.message,'err')}});
  }).catch(e=>{const box=document.querySelector('#vetAnalysesBox');if(box)box.innerHTML=`<p class="error">${esc(e.message)}</p>`});
 }
 function editVet(c,x){c.innerHTML=`<div class="card"><h2>Редактирование состояния</h2><form id="vetEdit" class="vet-form"><label>Тип ветеринарной записи<select name="record_type"><option value="prescription" ${x.record_type==='prescription'?'selected':''}>Предписание / назначение</option><option value="note" ${x.record_type==='note'?'selected':''}>Состояние животного</option></select></label><label>Препарат<input name="medication_name" value="${esc(x.medication_name||'')}" placeholder="Препарат"></label><label>Дозировка<input name="dosage" value="${esc(x.dosage||'')}" placeholder="Дозировка"></label><label>Режим / частота<input name="frequency" value="${esc(x.frequency||'')}" placeholder="Режим / частота"></label><label>Комментарий<textarea name="note">${esc(x.note||'')}</textarea></label><button>Сохранить изменения</button><button type="button" id="cancelVet">Отмена</button></form></div>`;document.querySelector('#cancelVet').onclick=()=>vet(c);document.querySelector('#vetEdit').onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.target));await api('vet',{method:'PUT',body:JSON.stringify({...b,id:x.id,animal_id:state.animal.id})});vet(c)}}
@@ -2944,14 +3089,14 @@ async function diets(c){
      </div>
     </article>`).join(''):'<p class="muted">Составьте план во вкладке «План питания» — тогда продукты подставятся сами.</p>';
    document.querySelectorAll('.open-diet').forEach(b=>b.onclick=()=>openDietEditor(b.dataset.id));
-   document.querySelectorAll('.activate-diet').forEach(b=>b.onclick=async()=>{try{const diet=rows.find(x=>x.id===b.dataset.id);await api(`diets/${b.dataset.id}`,{method:'PUT',body:JSON.stringify({name:diet.name,description:diet.description,active:true,target_calories:diet.target_calories})});loadDiets()}catch(e){alert(e.message)}});
+   document.querySelectorAll('.activate-diet').forEach(b=>b.onclick=async()=>{try{const diet=rows.find(x=>x.id===b.dataset.id);await api(`diets/${b.dataset.id}`,{method:'PUT',body:JSON.stringify({name:diet.name,description:diet.description,active:true,target_calories:diet.target_calories})});loadDiets()}catch(e){uiNotify(e.message,'err')}});
 document.querySelectorAll('.delete-diet').forEach(b=>b.onclick=async()=>{
-    if(!confirm('Удалить рацион и все его приёмы пищи?'))return;
+    if(!(await uiConfirm('Удалить рацион и все его приёмы пищи?')))return;
     await api(`diets/${b.dataset.id}`,{method:'DELETE'}); loadDiets();
    });
    document.querySelectorAll('.edit-diet-meta').forEach(b=>b.onclick=async()=>{
     const diet=rows.find(x=>x.id===b.dataset.id); if(!diet)return;
-    const name=prompt('Название плана питания',diet.name); if(name==null)return;
+    const name=(await uiPrompt('Название плана питания',{value:(diet.name),required:true})); if(name==null)return;
     await api(`diets/${diet.id}`,{method:'PUT',body:JSON.stringify({name,active:diet.active})}); loadDiets();
    });
   }catch(e){document.querySelector('#dietList').innerHTML=`<p class="error">${esc(e.message)}</p>`;}
@@ -2961,10 +3106,11 @@ document.querySelectorAll('.delete-diet').forEach(b=>b.onclick=async()=>{
   const host=document.querySelector('#dietEditor');
   if(!dietId){
    // create new
-   const name=prompt('Название плана питания','Основной рацион'); if(!name)return;
-   const start=prompt('Дата начала (ГГГГ-ММ-ДД)',new Date().toISOString().slice(0,10)); if(!start)return;
-   const end=prompt('Дата окончания (пусто = бессрочно)','')||null;
-   const kcal=prompt('Целевой калораж в день (пусто = не указан)','')||null;
+   const df=await uiForm({title:'Новый план питания',submit:'Создать',fields:[{name:'name',label:'Название плана',value:'Основной рацион',required:true},{name:'start',label:'Дата начала',type:'date',value:uiToday(),required:true},{name:'end',label:'Дата окончания',type:'date',hint:'Пусто — бессрочно'},{name:'kcal',label:'Целевой калораж в день',type:'number',min:0,hint:'Необязательно'}],validate:v=>v.end&&v.end<v.start?'Дата окончания раньше даты начала':null}); if(!df)return;
+   const name=df.name, start=df.start, end=df.end||null, kcal=df.kcal||null;
+
+
+
    const r=await api('diets',{method:'POST',body:JSON.stringify({animal_id:state.animal.id,name,start_date:start,end_date:end,target_calories:kcal})});
    dietId=r.id;
   }
@@ -2995,19 +3141,19 @@ document.querySelectorAll('.delete-diet').forEach(b=>b.onclick=async()=>{
    ${canWrite?`<div class="card" style="margin-top:12px"><b>Периоды действия</b>${(d.periods||[]).map(p=>`<div class="actions"><span>${esc(p.start_date)} — ${p.end_date?esc(p.end_date):'бессрочно'}</span><button type="button" class="danger delete-diet-period" data-id="${p.id}">Удалить период</button></div>`).join('')||'<p class="muted">Период не задан.</p>'}<button type="button" class="secondary" id="addDietPeriod">＋ Добавить период</button></div>`:''}
   </div>`;
 
-  document.querySelector('#closeDietEditor').onclick=()=>{host.innerHTML='';loadDiets();};document.querySelector('#editDietTarget')?.addEventListener('click',async()=>{const v=prompt('Целевой калораж в день',d.diet.target_calories??'');if(v===null)return;await api(`diets/${dietId}`,{method:'PUT',body:JSON.stringify({target_calories:v,name:d.diet.name,description:d.diet.description,active:d.diet.active})});openDietEditor(dietId)});
- document.querySelector('#addDietPeriod')?.addEventListener('click',async()=>{const start=prompt('Дата начала (ГГГГ-ММ-ДД)',new Date().toISOString().slice(0,10));if(!start)return;const end=prompt('Дата окончания (пусто = бессрочно)','')||null;await api(`diets/${dietId}/periods`,{method:'POST',body:JSON.stringify({start_date:start,end_date:end})});openDietEditor(dietId)});
- document.querySelectorAll('.delete-diet-period').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить этот период?'))return;await api(`diets/${dietId}/periods`,{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});openDietEditor(dietId)});
+  document.querySelector('#closeDietEditor').onclick=()=>{host.innerHTML='';loadDiets();};document.querySelector('#editDietTarget')?.addEventListener('click',async()=>{const v=(await uiPrompt('Целевой калораж в день',{value:(d.diet.target_calories??''),type:'number',min:0,hint:'Пусто — не указан'}));if(v===null)return;await api(`diets/${dietId}`,{method:'PUT',body:JSON.stringify({target_calories:v,name:d.diet.name,description:d.diet.description,active:d.diet.active})});openDietEditor(dietId)});
+ document.querySelector('#addDietPeriod')?.addEventListener('click',async()=>{const pf=await uiForm({title:'Новый период плана',submit:'Добавить',fields:[{name:'start',label:'Дата начала',type:'date',value:uiToday(),required:true},{name:'end',label:'Дата окончания',type:'date',hint:'Пусто — бессрочно'}],validate:v=>v.end&&v.end<v.start?'Дата окончания раньше даты начала':null});if(!pf)return;const start=pf.start,end=pf.end||null;await api(`diets/${dietId}/periods`,{method:'POST',body:JSON.stringify({start_date:start,end_date:end})});openDietEditor(dietId)});
+ document.querySelectorAll('.delete-diet-period').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить этот период?')))return;await api(`diets/${dietId}/periods`,{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});openDietEditor(dietId)});
 
   document.querySelector('#addMealBtn').onclick=()=>addMeal(dietId, days[0]||0);
   document.querySelector('#copyDayBtn').onclick=()=>copyDay(dietId, days);
   document.querySelector('#copyWeekBtn')?.addEventListener('click',async()=>{
-    if(!confirm('Скопировать приёмы дня 0 на дни 1–6? Существующие приёмы в этих днях будут заменены.')) return;
+    if(!(await uiConfirm('Скопировать приёмы дня 0 на дни 1–6? Существующие приёмы в этих днях будут заменены.'))) return;
     try{
       await api(`diets/${dietId}/copy-day`,{method:'POST',body:JSON.stringify({from_day_offset:0,to_day_offsets:[1,2,3,4,5,6]})});
       try{toast('День 0 скопирован на неделю','ok')}catch{}
       openDietEditor(dietId);
-    }catch(e){try{toast(e.message||'Ошибка копирования','warn')}catch{alert(e.message)}}
+    }catch(e){try{toast(e.message||'Ошибка копирования','warn')}catch{uiNotify(e.message,'err')}}
   });
   document.querySelector('#saveDietTemplateBtn')?.addEventListener('click',async()=>{
     try{
@@ -3015,21 +3161,21 @@ document.querySelectorAll('.delete-diet').forEach(b=>b.onclick=async()=>{
       const diet=(d.diets||[]).find(x=>x.id===dietId)||(d.diets||[])[0];
       const meals=(diet?.meals||[]).filter(m=>Number(m.day_offset)===0);
       if(!meals.length){try{toast('В дне 0 нет приёмов','warn')}catch{};return}
-      const name=prompt('Название шаблона рациона','Шаблон · '+(state.animal?.name||'рацион'));
+      const name=(await uiPrompt('Название шаблона рациона',{value:('Шаблон · '+(state.animal?.name||'рацион')),required:true}));
       if(!name) return;
       const key='mostik_diet_templates';
       const list=JSON.parse(localStorage.getItem(key)||'[]');
       list.unshift({id:Date.now().toString(36),name,created_at:new Date().toISOString(),meals:meals.map(m=>({time_of_day:m.time_of_day,title:m.title,products:(m.products||[]).map(p=>({name:p.name,quantity:p.quantity,calories:p.calories,sort_order:p.sort_order}))}))});
       localStorage.setItem(key,JSON.stringify(list.slice(0,20)));
       try{toast('Шаблон сохранён','ok')}catch{}
-    }catch(e){try{toast(e.message||'Не удалось сохранить шаблон','warn')}catch{alert(e.message)}}
+    }catch(e){try{toast(e.message||'Не удалось сохранить шаблон','warn')}catch{uiNotify(e.message,'err')}}
   });
   document.querySelector('#applyDietTemplateBtn')?.addEventListener('click',async()=>{
     try{
       const list=JSON.parse(localStorage.getItem('mostik_diet_templates')||'[]');
       if(!list.length){try{toast('Нет сохранённых шаблонов','warn')}catch{};return}
-      const names=list.map((t,i)=>`${i+1}. ${t.name}`).join('\n');
-      const pick=prompt('Номер шаблона для применения на неделю (дни 0–6):\n'+names,'1');
+
+      const pick=await uiChoice('Применить шаблон на неделю',list.map((t,i)=>[String(i+1),t.name]),'1',{message:'Шаблон будет применён на неделю (дни 0–6).',submit:'Применить'});
       if(pick==null) return;
       const t=list[Number(pick)-1];
       if(!t){try{toast('Неверный номер','warn')}catch{};return}
@@ -3047,11 +3193,11 @@ document.querySelectorAll('.delete-diet').forEach(b=>b.onclick=async()=>{
       await api(`diets/${dietId}/copy-day`,{method:'POST',body:JSON.stringify({from_day_offset:0,to_day_offsets:[1,2,3,4,5,6]})});
       try{toast('Шаблон применён на неделю','ok')}catch{}
       openDietEditor(dietId);
-    }catch(e){try{toast(e.message||'Ошибка шаблона','warn')}catch{alert(e.message)}}
+    }catch(e){try{toast(e.message||'Ошибка шаблона','warn')}catch{uiNotify(e.message,'err')}}
   });
 
   document.querySelectorAll('.delete-meal').forEach(b=>b.onclick=async()=>{
-   if(!confirm('Удалить приём пищи?'))return;
+   if(!(await uiConfirm('Удалить приём пищи?')))return;
    await api(`diets/${dietId}/meals`,{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});
    openDietEditor(dietId);
   });
@@ -3259,7 +3405,7 @@ async function openMealForm(dietId, day, meal){
         const idx=Number(btn.dataset.idx);
         const p=products[idx];
         const name=(p.name||'').trim();
-        if(!name){alert('Сначала укажите название продукта');return;}
+        if(!name){uiNotify('Сначала укажите название продукта','warn');return;}
         const grams=Number(p.grams);
         const totalKcal=Number(p.calories);
         let per100;
@@ -3269,16 +3415,16 @@ async function openMealForm(dietId, day, meal){
           // interpret calories field as already per 100g if no grams
           per100=totalKcal;
         }else{
-          alert('Укажите граммы и ккал (или только ккал как значение на 100 г)');return;
+          uiNotify('Укажите граммы и ккал (или только ккал как значение на 100 г)','warn');return;
         }
-        if(per100<0||per100>1000){alert('Получилось '+per100+' ккал/100г — проверьте числа');return;}
+        if(per100<0||per100>1000){uiNotify('Получилось '+per100+' ккал/100г — проверьте числа','warn');return;}
         try{
           await api('food-products',{method:'POST',body:JSON.stringify({name,kcal_per_100g:per100,animal_id:state.animal?.id||null})});
           await loadFoodCatalog(state.animal?.id);
           btn.textContent='✓';
           btn.disabled=true;
           setTimeout(()=>{btn.textContent='';btn.disabled=false;},1500);
-        }catch(e){alert(e.message||String(e));}
+        }catch(e){uiNotify(e.message||String(e),'err');}
       };
     });
   }
@@ -3302,7 +3448,7 @@ async function openMealForm(dietId, day, meal){
       const quantity=grams!=null?`${grams} ${unit}`:String(p.quantity||'');
       return {name:String(p.name).trim(),grams:unit==='г'?grams:null,quantity,unit,calories};
     });
-    if(!clean.length){alert('Добавьте хотя бы один продукт');return;}
+    if(!clean.length){uiNotify('Добавьте хотя бы один продукт','warn');return;}
     try{
       if(isEdit){
         await api(`diets/${dietId}/meals`,{method:'PUT',body:JSON.stringify({id:meal.id,day_offset:meal.day_offset,time_of_day:time,title,products:clean,sort_order:meal.sort_order})});
@@ -3311,7 +3457,7 @@ async function openMealForm(dietId, day, meal){
       }
       close();
       openDietEditor(dietId);
-    }catch(err){alert(err.message||String(err));}
+    }catch(err){uiNotify(err.message||String(err),'err');}
   };
 }
 
@@ -3325,8 +3471,9 @@ async function editMeal(dietId, meal){
 }
 
 async function copyDay(dietId, days){
-  const from=prompt('Из какого дня копировать?',String(days[0]??0)); if(from==null)return;
-  const toStr=prompt('В какие дни? (через запятую, напр. 1,2,3 или 1-6)','1,2,3,4,5,6'); if(!toStr)return;
+  const cf=await uiForm({title:'Копировать день',submit:'Копировать',fields:[{name:'from',label:'Из какого дня',type:'number',min:0,max:6,value:String(days[0]??0),required:true},{name:'to',label:'В какие дни',value:'1,2,3,4,5,6',required:true,hint:'Через запятую или диапазон: 1,2,3 или 1-6'}]}); if(!cf)return;
+  const from=cf.from, toStr=cf.to;
+
   let targets=[];
   toStr.split(',').forEach(part=>{
    part=part.trim();
@@ -3334,7 +3481,7 @@ async function copyDay(dietId, days){
    else targets.push(Number(part));
   });
   targets=targets.filter(n=>!isNaN(n));
-  if(!targets.length){alert('Не указаны дни');return;}
+  if(!targets.length){uiNotify('Не указаны дни','warn');return;}
   await api(`diets/${dietId}/copy-day`,{method:'POST',body:JSON.stringify({from_day_offset:Number(from),to_day_offsets:targets})});
   openDietEditor(dietId);
  }
@@ -3358,13 +3505,13 @@ async function copyDay(dietId, days){
   const text=await file.text();
   // Simple CSV: date,time,meal,product,quantity,calories,comment
   const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-  if(lines.length<2){alert('Файл пуст или не содержит данных');return;}
+  if(lines.length<2){uiNotify('Файл пуст или не содержит данных','warn');return;}
   const headers=lines[0].toLowerCase().split(/[;,]/).map(h=>h.trim());
   const rows=lines.slice(1).map(line=>{
    const cols=line.split(/[;,]/).map(x=>x.trim());
    const obj={}; headers.forEach((h,i)=>obj[h]=cols[i]||''); return obj;
   });
-  if(!confirm(`Импортировать ${rows.length} строк?\nБудет создан новый рацион «Импорт ${new Date().toLocaleDateString('ru-RU')}».`))return;
+  if(!(await uiConfirm(`Импортировать ${rows.length} строк?\nБудет создан новый рацион «Импорт ${new Date().toLocaleDateString('ru-RU')}».`)))return;
   const r=await api('diets',{method:'POST',body:JSON.stringify({animal_id:state.animal.id,name:`Импорт ${new Date().toLocaleDateString('ru-RU')}`,start_date:new Date().toISOString().slice(0,10)})});
   // Group by time+meal as one meal, products inside
   const groups={};
@@ -3380,7 +3527,7 @@ async function copyDay(dietId, days){
   for(const g of Object.values(groups)){
    await api(`diets/${r.id}/meals`,{method:'POST',body:JSON.stringify({day_offset:0,time_of_day:g.time,title:g.title,products:g.products})});
   }
-  alert(`Импортировано. Создан рацион, приёмов: ${Object.keys(groups).length}`);
+  uiNotify(`Импортировано. Создан рацион, приёмов: ${Object.keys(groups).length}`,'ok');
   loadDiets();
   openDietEditor(r.id);
  }
@@ -3452,7 +3599,7 @@ function enrichment(c){
    await api('enrichment',{method:'POST',body:JSON.stringify(b)});
    e.target.reset();
    loadList();
-  }catch(err){alert(err.message);}
+  }catch(err){uiNotify(err.message,'err');}
  });
 
  function loadList(){
@@ -3467,8 +3614,8 @@ function enrichment(c){
      ${canWrite?`<button type="button" class="danger delete-enrich" data-id="${x.id}">Удалить</button>`:''}
     </article>`).join('')||'<p class="muted">Записей пока нет. Добавьте первое обогащение.</p>'}`;
    document.querySelectorAll('.delete-enrich').forEach(b=>b.onclick=async()=>{
-    if(!confirm('Удалить запись?'))return;
-    try{await api('enrichment',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});loadList();}catch(e){alert(e.message);}
+    if(!(await uiConfirm('Удалить запись?')))return;
+    try{await api('enrichment',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});loadList();}catch(e){uiNotify(e.message,'err');}
    });
   }).catch(e=>document.querySelector('#enrichList').innerHTML=`<p class="error">${esc(e.message)}</p>`);
  }
@@ -3698,7 +3845,7 @@ if(document.querySelector('#foodForm') && state.defaults?.food){
            })});
            try{toast('Приём отмечен','ok')}catch{}
            food(c);
-         }catch(e){try{toast(e.message,'warn')}catch{alert(e.message)}}
+         }catch(e){try{toast(e.message,'warn')}catch{uiNotify(e.message,'err')}}
        };
      });
    }catch(e){
@@ -3719,7 +3866,7 @@ document.querySelector('#foodForm')?.addEventListener('submit',async e=>{
     await api('food',{method:'POST',body:JSON.stringify({...b,animal_id:state.animal.id})});
     toast('Сохранено');
     food(c);
-  }catch(err){alert(err.message)}
+  }catch(err){uiNotify(err.message,'err')}
  });
  api(`food?animal_id=${encodeURIComponent(state.animal.id)}`).then(d=>{
   state.food=d.food;
@@ -3730,8 +3877,8 @@ document.querySelector('#foodForm')?.addEventListener('submit',async e=>{
   }).join('')||'<p class="muted">Записей пока нет.</p>'}`;
   document.querySelectorAll('.repeat-btn[data-repeat="food"]').forEach(b=>b.onclick=()=>repeatRecord('food',state.food.find(x=>x.id===b.dataset.id)||{}));
   document.querySelectorAll('.delete-food').forEach(b=>b.onclick=async()=>{
-   if(!confirm('Удалить запись рациона?'))return;
-   try{await api('food',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});food(c)}catch(e){alert(e.message)}
+   if(!(await uiConfirm('Удалить запись рациона?')))return;
+   try{await api('food',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});food(c)}catch(e){uiNotify(e.message,'err')}
   });
  });
 }
@@ -3740,16 +3887,16 @@ function reminders(c){
   const canCreate=['admin','owner','trainer','keeper','vet'].includes(state.user.effective_role);
   const aid=state.animal?.id?`?animal_id=${encodeURIComponent(state.animal.id)}`:'';
   c.innerHTML=`<div class="card"><div class="top"><div><h2><span class="ui-emoji" aria-hidden="true">🔔</span> Напоминания</h2><p class="muted">Напоминания по выбранному животному. Повторяющиеся напоминания автоматически переносятся на следующий срок после отметки «Выполнено».</p></div><div class="actions"><button id="notifyBtn">Разрешить уведомления</button>${canCreate&&!isAllAnimals()?'<button class="secondary" id="newReminder">+ Новое напоминание</button>':''}</div></div>${isAllAnimals()?scopeToolbar():''}<div id="reminderForm"></div><div id="reminderList"><p class="muted">Загружаю…</p></div></div>`;
-  const notify=document.querySelector('#notifyBtn'); if(notify){notify.onclick=async()=>{if(!('Notification' in window)){alert('Браузер не поддерживает уведомления.');return}const p=await Notification.requestPermission();try{toast(p==='granted'?'Уведомления разрешены — напоминания будут приходить в браузер':'Уведомления не разрешены',p==='granted'?'ok':'warn')}catch{alert(p==='granted'?'Уведомления разрешены.':'Уведомления не разрешены.')};};}
+  const notify=document.querySelector('#notifyBtn'); if(notify){notify.onclick=async()=>{if(!('Notification' in window)){uiNotify('Браузер не поддерживает уведомления.','warn');return}const p=await Notification.requestPermission();try{toast(p==='granted'?'Уведомления разрешены — напоминания будут приходить в браузер':'Уведомления не разрешены',p==='granted'?'ok':'warn')}catch{uiNotify(p==='granted'?'Уведомления разрешены.':'Уведомления не разрешены.','warn')};};}
   document.querySelector('#scopeSort')?.addEventListener('change',e=>{state.scopeSort=e.target.value;reminders(c)}); document.querySelector('#newReminder')?.addEventListener('click',()=>renderReminderForm());
   api('reminders'+aid).then(d=>{state.reminders=d.reminders||[];state.dueReminders=d.due||[];renderReminderList()}).catch(e=>document.querySelector('#reminderList').innerHTML=`<p class="error">${esc(e.message)}</p>`);
   function renderReminderList(){
     const rows=sortRows(state.reminders||[],'reminders'); document.querySelector('#reminderList').innerHTML=`${state.dueReminders.length?`<div class="attention"><b><span class="ui-emoji" aria-hidden="true">🔔</span> Сейчас нужно сделать</b>${state.dueReminders.map(x=>`<article class="timeline"><b>${esc(x.title)}</b><small>${x.animal_name?esc(x.animal_name)+' · ':''}${fmtDate(x.remind_at)}</small>${x.details?`<p>${esc(x.details)}</p>`:''}<button class="secondary complete-reminder" data-id="${x.id}">✓ Выполнено</button></article>`).join('')}</div>`:''}<h3>Все напоминания</h3>${rows.map(x=>`<article class="timeline"><b>${esc(x.title)}</b><small>${x.animal_name?esc(x.animal_name)+' · ':''}${fmtDate(x.remind_at)} · ${x.repeat_type==='once'?'Один раз':x.repeat_type==='daily'?'Ежедневно':x.repeat_type==='weekly'?'Еженедельно':x.repeat_type==='monthly'?'Ежемесячно':'Каждые '+(x.every_n_days||1)+' дней'}</small>${x.details?`<p>${esc(x.details)}</p>`:''}<small>${x.enabled?'Включено':'Выключено'}</small><div class="actions"><button class="secondary edit-reminder" data-id="${x.id}">Изменить</button><button class="danger delete-reminder" data-id="${x.id}">Удалить</button></div></article>`).join('')||'<p class="muted">Напоминаний пока нет.</p>'}`;
     document.querySelectorAll('.complete-reminder').forEach(b=>b.onclick=async()=>{await api(`reminders/${b.dataset.id}/complete`,{method:'POST'});reminders(c)});
-    document.querySelectorAll('.delete-reminder').forEach(b=>b.onclick=async()=>{if(confirm('Удалить напоминание?')){await api('reminders',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});reminders(c)}});
+    document.querySelectorAll('.delete-reminder').forEach(b=>b.onclick=async()=>{if((await uiConfirm('Удалить напоминание?'))){await api('reminders',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});reminders(c)}});
     document.querySelectorAll('.edit-reminder').forEach(b=>b.onclick=()=>renderReminderForm(state.reminders.find(x=>x.id===b.dataset.id)));
   }
-  function renderReminderForm(x={}){ const dt=x.remind_at?new Date(x.remind_at):new Date(Date.now()+3600000); const local=new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,16); document.querySelector('#reminderForm').innerHTML=`<div class="card"><h3>${x.id?'Изменить':'Новое'} напоминание</h3><form id="remForm"><label>Что напомнить<input name="title" required value="${esc(x.title||'')}"></label><label>Когда<input name="remind_at" type="datetime-local" required value="${local}"></label><label>Подробности<textarea name="details">${esc(x.details||'')}</textarea></label><label>Повтор<select name="repeat_type"><option value="once" ${x.repeat_type==='once'||!x.repeat_type?'selected':''}>Один раз</option><option value="daily" ${x.repeat_type==='daily'?'selected':''}>Ежедневно</option><option value="weekly" ${x.repeat_type==='weekly'?'selected':''}>Еженедельно</option><option value="monthly" ${x.repeat_type==='monthly'?'selected':''}>Ежемесячно</option><option value="every_n_days" ${x.repeat_type==='every_n_days'?'selected':''}>Каждые N дней</option></select></label><label id="rdays" ${x.repeat_type==='every_n_days'?'':'hidden'}>Количество дней<input name="every_n_days" type="number" min="1" value="${Number(x.every_n_days||2)}"></label><label id="repeatUntilWrap" ${x.repeat_type&&x.repeat_type!=='once'?'':'hidden'}>До даты (пусто = бессрочно)<input name="repeat_until" type="date" value="${esc(x.repeat_until||'')}"></label><label>Активно<select name="enabled"><option value="true" ${x.enabled!==false?'selected':''}>Да</option><option value="false" ${x.enabled===false?'selected':''}>Нет</option></select></label><div class="actions"><button>${x.id?'Сохранить':'Создать'}</button><button type="button" class="secondary" id="cancelRem">Отмена</button></div></form></div>`; const f=document.querySelector('#remForm'); f.elements.repeat_type.onchange=()=>{document.querySelector('#rdays').hidden=f.elements.repeat_type.value!=='every_n_days';document.querySelector('#repeatUntilWrap').hidden=f.elements.repeat_type.value==='once'};document.querySelector('#cancelRem').onclick=()=>{document.querySelector('#reminderForm').innerHTML=''};f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(f));b.animal_id=state.animal?.id||null;b.remind_at=new Date(b.remind_at).toISOString();b.enabled=b.enabled==='true';try{await api('reminders',{method:x.id?'PUT':'POST',body:JSON.stringify(x.id?{...b,id:x.id}:{...b})});reminders(c)}catch(err){alert(err.message)}} }
+  function renderReminderForm(x={}){ const dt=x.remind_at?new Date(x.remind_at):new Date(Date.now()+3600000); const local=new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,16); document.querySelector('#reminderForm').innerHTML=`<div class="card"><h3>${x.id?'Изменить':'Новое'} напоминание</h3><form id="remForm"><label>Что напомнить<input name="title" required value="${esc(x.title||'')}"></label><label>Когда<input name="remind_at" type="datetime-local" required value="${local}"></label><label>Подробности<textarea name="details">${esc(x.details||'')}</textarea></label><label>Повтор<select name="repeat_type"><option value="once" ${x.repeat_type==='once'||!x.repeat_type?'selected':''}>Один раз</option><option value="daily" ${x.repeat_type==='daily'?'selected':''}>Ежедневно</option><option value="weekly" ${x.repeat_type==='weekly'?'selected':''}>Еженедельно</option><option value="monthly" ${x.repeat_type==='monthly'?'selected':''}>Ежемесячно</option><option value="every_n_days" ${x.repeat_type==='every_n_days'?'selected':''}>Каждые N дней</option></select></label><label id="rdays" ${x.repeat_type==='every_n_days'?'':'hidden'}>Количество дней<input name="every_n_days" type="number" min="1" value="${Number(x.every_n_days||2)}"></label><label id="repeatUntilWrap" ${x.repeat_type&&x.repeat_type!=='once'?'':'hidden'}>До даты (пусто = бессрочно)<input name="repeat_until" type="date" value="${esc(x.repeat_until||'')}"></label><label>Активно<select name="enabled"><option value="true" ${x.enabled!==false?'selected':''}>Да</option><option value="false" ${x.enabled===false?'selected':''}>Нет</option></select></label><div class="actions"><button>${x.id?'Сохранить':'Создать'}</button><button type="button" class="secondary" id="cancelRem">Отмена</button></div></form></div>`; const f=document.querySelector('#remForm'); f.elements.repeat_type.onchange=()=>{document.querySelector('#rdays').hidden=f.elements.repeat_type.value!=='every_n_days';document.querySelector('#repeatUntilWrap').hidden=f.elements.repeat_type.value==='once'};document.querySelector('#cancelRem').onclick=()=>{document.querySelector('#reminderForm').innerHTML=''};f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(f));b.animal_id=state.animal?.id||null;b.remind_at=new Date(b.remind_at).toISOString();b.enabled=b.enabled==='true';try{await api('reminders',{method:x.id?'PUT':'POST',body:JSON.stringify(x.id?{...b,id:x.id}:{...b})});reminders(c)}catch(err){uiNotify(err.message,'err')}} }
 }
 async function insight(c){
  if(state.user.effective_role!=='admin'){c.innerHTML='<div class="card"><h2>MOSTIK Insight</h2><p>Раздел доступен только администратору.</p></div>';return}
@@ -3761,16 +3908,16 @@ async function adminErrors(c){
  const load=async()=>{try{const days=document.querySelector('#errorDays').value;const d=await api('admin/errors?days='+days+'&limit=40');document.querySelector('#errorStats').innerHTML=`<div class="grid dashboard-stats"><div class="card stat-card"><span class="muted">Типов ошибок</span><strong>${d.summary.error_types||0}</strong></div><div class="card stat-card"><span class="muted">Всего случаев</span><strong>${d.summary.occurrences||0}</strong></div><div class="card stat-card"><span class="muted">Затронуто пользователей</span><strong>${d.summary.affected_users||0}</strong></div></div><div class="grid" style="margin-top:18px"><div class="card"><h3>По источнику</h3>${(d.by_source||[]).map(x=>`<div class="summary-row"><span>${esc(x.source)}</span><b>${x.occurrences}</b></div>`).join('')||'<p class="muted">Нет данных</p>'}</div><div class="card"><h3>По HTTP-коду</h3>${(d.by_status||[]).map(x=>`<div class="summary-row"><span>${x.status||'без кода'}</span><b>${x.occurrences}</b></div>`).join('')||'<p class="muted">Нет данных</p>'}</div></div><div class="card" style="margin-top:18px"><h3>Самые частые ошибки</h3>${(d.errors||[]).map(x=>`<article class="insight-item"><div class="top"><div><span class="badge">${x.count} случаев</span><h3>${esc(x.message)}</h3></div><span class="muted">${esc(x.source)} · ${x.status||'—'}</span></div><p class="muted">${esc(x.path||x.url||'—')} ${x.screen?`· экран: ${esc(x.screen)}`:''}</p><small class="muted">Последний случай: ${fmtDate(x.last_seen)}</small></article>`).join('')||'<div class="notice">Ошибок пока не зарегистрировано.</div>'}</div>`}catch(e){document.querySelector('#errorStats').innerHTML=`<p class="error">${esc(e.message)}</p>`}};
  document.querySelector('#refreshErrors').onclick=load;document.querySelector('#errorDays').onchange=load;load();
 }
-function admin(c){api('admin/users').then(d=>{state.adminUsers=d.users;state.grants=d.grants;c.innerHTML=`<div class="card"><div class="top"><div><h2>Администрирование</h2><p class="muted">Пользователи, роли и доступ к животным.</p></div><button id="refreshAdmin">Обновить</button></div><div class="notice">Роли пользователя можно назначать и менять независимо друг от друга. Активная роль определяет рабочее меню и права интерфейса.</div><hr><h3>Новый пользователь</h3><form id="userAdd" class="admin-form"><input name="display_name" placeholder="Имя и фамилия" required><input name="email" type="email" placeholder="Email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="email" required><input name="password" type="password" placeholder="Пароль (мин. 6)" minlength="6" required><fieldset class="role-checks"><legend>Роли</legend>${['owner','trainer','keeper','vet','admin'].map(x=>`<label class="check"><input type="checkbox" name="roles" value="${x}" ${x==='owner'?'checked':''}> ${roleName(x)}</label>`).join('')}</fieldset><button>Создать</button></form><hr><h3>Пользователи и доступ</h3><div class="admin-users">${state.adminUsers.map(u=>{const ids=state.grants.filter(g=>g.user_id===u.id).map(g=>g.animal_id);return `<article class="user-card"><div class="user-head"><div><b>${esc(u.display_name)}</b><span class="role">${(u.roles||[u.role]).map(roleName).map(esc).join(', ')}</span><small>${esc(u.email)}</small></div>${u.id===state.user.id?'<span class="muted">Это вы</span>':`<span class="actions"><button class="secondary reset-recovery" data-id="${u.id}">Новый код восстановления</button><button class="danger delete-user" data-id="${u.id}">Удалить</button></span>`}</div><div class="user-role-editor"><b>Роли</b><div class="role-checks">${['owner','trainer','keeper','vet','admin'].map(x=>`<label class="check"><input type="checkbox" data-role-user="${u.id}" value="${x}" ${(u.roles||[u.role]).includes(x)?'checked':''}> ${roleName(x)}</label>`).join('')}</div><button type="button" class="secondary save-roles" data-id="${u.id}">Сохранить роли</button></div><div class="access-grid">${state.animals.map(a=>`<label class="check"><input type="checkbox" data-user="${u.id}" value="${a.id}" ${ids.includes(a.id)?'checked':''}> ${esc(a.name)}</label>`).join('')}</div><button class="save-access" data-id="${u.id}">Сохранить доступ</button></article>`}).join('')}</div></div>`;document.querySelector('#refreshAdmin').onclick=()=>admin(c);document.querySelector('#userAdd').onsubmit=async e=>{e.preventDefault();try{const fd=new FormData(e.target); const body=Object.fromEntries(fd); body.roles=fd.getAll('roles'); delete body.role; await api('admin/users',{method:'POST',body:JSON.stringify(body)});alert('Пользователь создан');admin(c)}catch(x){alert(x.message)}};document.querySelectorAll('.save-roles').forEach(b=>b.onclick=async()=>{
+function admin(c){api('admin/users').then(d=>{state.adminUsers=d.users;state.grants=d.grants;c.innerHTML=`<div class="card"><div class="top"><div><h2>Администрирование</h2><p class="muted">Пользователи, роли и доступ к животным.</p></div><button id="refreshAdmin">Обновить</button></div><div class="notice">Роли пользователя можно назначать и менять независимо друг от друга. Активная роль определяет рабочее меню и права интерфейса.</div><hr><h3>Новый пользователь</h3><form id="userAdd" class="admin-form"><input name="display_name" placeholder="Имя и фамилия" required><input name="email" type="email" placeholder="Email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="email" required><input name="password" type="password" placeholder="Пароль (мин. 6)" minlength="6" required><fieldset class="role-checks"><legend>Роли</legend>${['owner','trainer','keeper','vet','admin'].map(x=>`<label class="check"><input type="checkbox" name="roles" value="${x}" ${x==='owner'?'checked':''}> ${roleName(x)}</label>`).join('')}</fieldset><button>Создать</button></form><hr><h3>Пользователи и доступ</h3><div class="admin-users">${state.adminUsers.map(u=>{const ids=state.grants.filter(g=>g.user_id===u.id).map(g=>g.animal_id);return `<article class="user-card"><div class="user-head"><div><b>${esc(u.display_name)}</b><span class="role">${(u.roles||[u.role]).map(roleName).map(esc).join(', ')}</span><small>${esc(u.email)}</small></div>${u.id===state.user.id?'<span class="muted">Это вы</span>':`<span class="actions"><button class="secondary reset-recovery" data-id="${u.id}">Новый код восстановления</button><button class="danger delete-user" data-id="${u.id}">Удалить</button></span>`}</div><div class="user-role-editor"><b>Роли</b><div class="role-checks">${['owner','trainer','keeper','vet','admin'].map(x=>`<label class="check"><input type="checkbox" data-role-user="${u.id}" value="${x}" ${(u.roles||[u.role]).includes(x)?'checked':''}> ${roleName(x)}</label>`).join('')}</div><button type="button" class="secondary save-roles" data-id="${u.id}">Сохранить роли</button></div><div class="access-grid">${state.animals.map(a=>`<label class="check"><input type="checkbox" data-user="${u.id}" value="${a.id}" ${ids.includes(a.id)?'checked':''}> ${esc(a.name)}</label>`).join('')}</div><button class="save-access" data-id="${u.id}">Сохранить доступ</button></article>`}).join('')}</div></div>`;document.querySelector('#refreshAdmin').onclick=()=>admin(c);document.querySelector('#userAdd').onsubmit=async e=>{e.preventDefault();try{const fd=new FormData(e.target); const body=Object.fromEntries(fd); body.roles=fd.getAll('roles'); delete body.role; await api('admin/users',{method:'POST',body:JSON.stringify(body)});uiNotify('Пользователь создан','ok');admin(c)}catch(x){uiNotify(x.message,'err')}};document.querySelectorAll('.save-roles').forEach(b=>b.onclick=async()=>{
  const roles=[...document.querySelectorAll(`input[data-role-user="${b.dataset.id}"]:checked`)].map(x=>x.value);
- if(!roles.length){alert('Выберите хотя бы одну роль');return;}
- try{await api(`admin/users/${b.dataset.id}/roles`,{method:'PUT',body:JSON.stringify({roles})});toast('Роли сохранены');admin(c)}catch(x){alert(x.message)}
+ if(!roles.length){uiNotify('Выберите хотя бы одну роль','warn');return;}
+ try{await api(`admin/users/${b.dataset.id}/roles`,{method:'PUT',body:JSON.stringify({roles})});toast('Роли сохранены');admin(c)}catch(x){uiNotify(x.message,'err')}
 });
-document.querySelectorAll('.save-access').forEach(b=>b.onclick=async()=>{const id=b.dataset.id,animal_ids=[...document.querySelectorAll(`input[data-user="${id}"]:checked`)].map(x=>x.value);try{await api(`admin/users/${id}/access`,{method:'PUT',body:JSON.stringify({animal_ids})});alert('Доступ сохранён')}catch(x){alert(x.message)}});document.querySelectorAll('.reset-recovery').forEach(b=>b.onclick=async()=>{if(!confirm('Создать новый код восстановления для этого пользователя?'))return;try{const d=await api(`admin/users/${b.dataset.id}/recovery-code`,{method:'POST'});alert(`Код восстановления для передачи пользователю:
+document.querySelectorAll('.save-access').forEach(b=>b.onclick=async()=>{const id=b.dataset.id,animal_ids=[...document.querySelectorAll(`input[data-user="${id}"]:checked`)].map(x=>x.value);try{await api(`admin/users/${id}/access`,{method:'PUT',body:JSON.stringify({animal_ids})});uiNotify('Доступ сохранён','ok')}catch(x){uiNotify(x.message,'err')}});document.querySelectorAll('.reset-recovery').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Создать новый код восстановления для этого пользователя?')))return;try{const d=await api(`admin/users/${b.dataset.id}/recovery-code`,{method:'POST'});uiAlert(`Код восстановления для передачи пользователю:
 
 ${d.recovery_code}
 
-Старый код больше не действителен.`)}catch(x){alert(x.message)}});document.querySelectorAll('.delete-user').forEach(b=>b.onclick=async()=>{if(!confirm('Удалить пользователя?'))return;try{await api('admin/users',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});admin(c)}catch(x){alert(x.message)}})}).catch(x=>c.innerHTML=`<div class="card"><h2>Администрирование</h2><p class="error">${esc(x.message)}</p></div>`)}
+Старый код больше не действителен.`,{title:'Новый код восстановления',copy:d.recovery_code})}catch(x){uiNotify(x.message,'err')}});document.querySelectorAll('.delete-user').forEach(b=>b.onclick=async()=>{if(!(await uiConfirm('Удалить пользователя?')))return;try{await api('admin/users',{method:'DELETE',body:JSON.stringify({id:b.dataset.id})});admin(c)}catch(x){uiNotify(x.message,'err')}})}).catch(x=>c.innerHTML=`<div class="card"><h2>Администрирование</h2><p class="error">${esc(x.message)}</p></div>`)}
 const fmt=s=>`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
 applySettings();
 init();

@@ -18,10 +18,10 @@ import postgres from 'postgres';
 /** @type {{ sql: Function }} */
 let db;
 
-const dbUrl = process.env.NETLIFY_DATABASE_URL
+const dbUrl = (process.env.NETLIFY_DATABASE_URL
   || process.env.DATABASE_URL
   || process.env.NEON_DATABASE_URL
-  || '';
+  || '').trim();
 
 if (dbUrl) {
   const sql = postgres(dbUrl, {
@@ -304,7 +304,7 @@ export default async (req) => {
     }, 503);
   }
   const u=new URL(req.url), p=u.pathname.replace(/^\/api\/?/,'');
-  if(p==='health'){const c=await db.sql`SELECT count(*)::int users, count(*) FILTER (WHERE role='admin')::int admins FROM users`; return json({ok:true,app:'MOSTIK',version:'5.3.24',users:c[0].users,admins:c[0].admins});}
+  if(p==='health'){const c=await db.sql`SELECT count(*)::int users, count(*) FILTER (WHERE role='admin')::int admins FROM users`; return json({ok:true,app:'MOSTIK',version:'5.3.27',users:c[0].users,admins:c[0].admins});}
   if(p==='auth/status' && req.method==='GET'){const c=await db.sql`SELECT count(*)::int users, count(*) FILTER (WHERE role='admin')::int admins FROM users`; return json({setup_required:c[0].admins===0,users:c[0].users,admins:c[0].admins});}
   if(p==='auth/register' && req.method==='POST'){
     const b=await parse(req);
@@ -675,7 +675,10 @@ export default async (req) => {
       const r=await db.sql`SELECT DISTINCT ON (a.id) a.*,COALESCE((SELECT json_agg(json_build_object('id',aa2.id,'title',aa2.title,'category',aa2.category) ORDER BY aa2.title) FROM animal_attention aa2 WHERE aa2.animal_id=a.id),'[]') attention,COALESCE((SELECT json_agg(json_build_object('id',df.id,'category',df.category,'title',df.title,'status',df.status,'note',df.note,'created_at',df.created_at) ORDER BY df.category,df.title) FROM animal_development_features df WHERE df.animal_id=a.id),'[]') development_features,COALESCE((SELECT json_agg(json_build_object('id',hf.id,'feature_type',hf.feature_type,'title',hf.title,'severity',hf.severity,'status',hf.status,'note',hf.note,'created_at',hf.created_at) ORDER BY CASE hf.severity WHEN 'critical' THEN 1 WHEN 'important' THEN 2 ELSE 3 END,hf.title) FROM animal_health_features hf WHERE hf.animal_id=a.id),'[]') health_features FROM animals a LEFT JOIN animal_access aa ON aa.animal_id=a.id AND aa.user_id=${me.id} WHERE ${me.role==='admin'} OR a.owner_id=${me.id} OR aa.user_id IS NOT NULL ORDER BY a.id,a.name`;
       return json({animals:r});
     }
-    if(req.method==='POST' && ['admin','owner','keeper'].includes(me.effective_role)){
+    if(req.method==='POST'){
+      if(!['admin','owner','keeper'].includes(me.effective_role)){
+        return json({error:'Создавать животных могут владелец, кипер или администратор. Войдите как demo.owner@mostik.local'},403);
+      }
       const b=await parse(req), aid=id();
       // Keeper may create an animal in their environment. For legacy schema compatibility the creator is stored in owner_id,
       // while an explicit animal_access grant makes the environment relationship unambiguous.
@@ -1017,14 +1020,22 @@ export default async (req) => {
       const rows=await db.sql`SELECT t.*,u.display_name creator_name FROM smart_templates t LEFT JOIN users u ON u.id=t.created_by
         WHERE (${section}='' OR t.section=${section}) AND (${species}='' OR t.species IS NULL OR t.species=${species})
           AND (t.visibility='official' OR t.approved=true OR t.created_by=${me.id})
-        ORDER BY t.visibility='official' DESC,t.updated_at DESC`;
+        ORDER BY t.updated_at DESC`;
       return json({templates:rows});
     }
     if(req.method==='POST'){
       const b=await parse(req); const section=String(b.section||'').trim(), name=String(b.name||'').trim();
       if(!section||!name)return json({error:'Укажите раздел и название шаблона'},400);
       const tid=id();
-      await db.sql`INSERT INTO smart_templates(id,section,name,description,species,payload,created_by,visibility,approved) VALUES(${tid},${section},${name},${String(b.description||'')},${String(b.species||'').trim()||null},${JSON.stringify(b.payload||{})}::jsonb,${me.id},${['personal','organization','official'].includes(b.visibility)?b.visibility:'personal'},${me.effective_role==='admin'&&b.visibility==='official'})`;
+      const payloadJson=JSON.stringify(b.payload&&typeof b.payload==='object'?b.payload:{});
+      const vis=['personal','organization','official'].includes(b.visibility)?b.visibility:'personal';
+      const appr=!!(me.effective_role==='admin'&&vis==='official');
+      try{
+        await db.sql`INSERT INTO smart_templates(id,section,name,description,species,payload,created_by,visibility,approved) VALUES(${tid},${section},${name},${String(b.description||'')},${String(b.species||'').trim()||null},${payloadJson}::jsonb,${me.id},${vis},${appr})`;
+      }catch(insErr){
+        // PGlite / drivers without ::jsonb param cast
+        await db.sql`INSERT INTO smart_templates(id,section,name,description,species,payload,created_by,visibility,approved) VALUES(${tid},${section},${name},${String(b.description||'')},${String(b.species||'').trim()||null},${payloadJson},${me.id},${vis},${appr})`;
+      }
       return json({ok:true,id:tid},201);
     }
   }
@@ -1097,8 +1108,10 @@ export default async (req) => {
       return json({analyses:rows});
     }
     if(req.method==='POST' || req.method==='PUT'){
-      if(!['admin','vet'].includes(me.effective_role))return json({error:'Только ветеринар или администратор'},403);
       const b=await parse(req), aid=String(b.animal_id||''); if(!await allowedAnimal(me,aid))return json({error:'Нет доступа к животному'},403);
+      const isNote=String(b.record_type||'')==='note';
+      if(!isNote && !['admin','vet'].includes(me.effective_role))
+        return json({error:'Назначения может создавать только ветеринар или администратор. Заметки доступны всем.'},403);
       const status=['normal','high','low','critical','unknown'].includes(String(b.status))?String(b.status):'unknown';
       if(req.method==='POST'){
         const vid=id(); await db.sql`INSERT INTO vet_analyses(id,animal_id,vet_id,sample_date,analysis_name,parameter,value_numeric,value_text,unit,reference_min,reference_max,status,note) VALUES(${vid},${aid},${me.id},${b.sample_date||new Date().toISOString().slice(0,10)},${String(b.analysis_name||'').trim()},${String(b.parameter||'').trim()},${b.value_numeric===''||b.value_numeric==null?null:Number(b.value_numeric)},${b.value_text||''},${b.unit||''},${b.reference_min===''||b.reference_min==null?null:Number(b.reference_min)},${b.reference_max===''||b.reference_max==null?null:Number(b.reference_max)},${status},${b.note||''})`;
@@ -1133,8 +1146,10 @@ export default async (req) => {
       return json({records:r});
     }
     if(req.method==='POST' || req.method==='PUT'){
-      if(!['admin','vet'].includes(me.effective_role))return json({error:'Только ветеринар или администратор'},403);
       const b=await parse(req), aid=String(b.animal_id||''); if(!await allowedAnimal(me,aid))return json({error:'Нет доступа к животному'},403);
+      const isNote=String(b.record_type||'')==='note';
+      if(!isNote && !['admin','vet'].includes(me.effective_role))
+        return json({error:'Назначения может создавать только ветеринар или администратор. Заметки доступны всем.'},403);
       if(req.method==='POST'){const vid=id(); await db.sql`INSERT INTO vet_records(id,animal_id,vet_id,record_type,note,medication_name,dosage,frequency,start_date,end_date,instructions,pain,appetite,sleep,complaint) VALUES(${vid},${aid},${me.id},${b.record_type||'prescription'},${b.note||''},${b.medication_name||''},${b.dosage||''},${b.frequency||''},${b.start_date||null},${b.end_date||null},${b.instructions||''},${b.pain==null?null:Number(b.pain)||null},${b.appetite==null?null:Number(b.appetite)||null},${b.sleep==null?null:Number(b.sleep)||null},${b.complaint||''})`;return json({ok:true,id:vid},201)}
       const vid=String(b.id||''); const found=await db.sql`SELECT id FROM vet_records WHERE id=${vid} AND animal_id=${aid}`; if(!found.length)return json({error:'Запись не найдена'},404); await db.sql`UPDATE vet_records SET record_type=${b.record_type||'prescription'},note=${b.note||''},medication_name=${b.medication_name||''},dosage=${b.dosage||''},frequency=${b.frequency||''},start_date=${b.start_date||null},end_date=${b.end_date||null},instructions=${b.instructions||''},pain=${b.pain==null?null:Number(b.pain)||null},appetite=${b.appetite==null?null:Number(b.appetite)||null},sleep=${b.sleep==null?null:Number(b.sleep)||null},complaint=${b.complaint||''},updated_at=now() WHERE id=${vid}`;return json({ok:true});
     }

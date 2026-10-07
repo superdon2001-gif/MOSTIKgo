@@ -1,0 +1,54 @@
+MOSTIK v5.3.23 — fix GET /api/diets/active 404
+==============================================
+
+BUG
+---
+GET /api/diets/active?animal_id=... returned 404 "Рацион не найден".
+
+Cause: route /^diets\/([^/]+)$/ matched path segment "active" as a diet id
+before the dedicated active-diet handler ran.
+
+FIX
+---
+netlify/functions/api.mjs (and root api.mjs mirror):
+
+  // before
+  if(dm && !mealsM && !periodM && !copyM){
+
+  // after
+  if(dm && !mealsM && !periodM && !copyM && !activeM){
+
+API health version bumped to 5.3.23.
+
+DEMO DATA
+---------
+Migration:
+  netlify/database/migrations/052_demo_diets_active.sql
+
+Creates active demo diets for:
+  - demo-animal-baikal (Байкал) — 3 meals / day
+  - demo-animal-dymka (Дымка) — 2 meals / day
+
+Ids are demo-* only; safe on production alongside real data.
+
+HOW TO APPLY
+------------
+1. Deploy updated netlify/functions/api.mjs (git push or netlify deploy --prod).
+2. Run migration 052 in Netlify/Neon SQL editor (or netlify db / psql).
+3. Login as demo.owner@mostik.local / demo123 (or demo.keeper).
+4. Open animal Байкал → food / diet UI.
+5. Network: GET /api/diets/active?animal_id=demo-animal-baikal → 200
+   with active plan and meals (not 404).
+
+Without migration, fixed API still returns 200:
+  { "active": null, "meals": [] }
+when no plan exists — which is correct.
+
+TEST CHECKLIST
+--------------
+[ ] /api/health → version 5.3.23
+[ ] diets/active without auth → 401
+[ ] diets/active with animal, no plan → 200 {active:null, meals:[]}
+[ ] diets/active for demo-animal-baikal (after 052) → 200 + meals
+[ ] GET /api/diets/{real-uuid} still works
+[ ] Create animal as owner/keeper still works

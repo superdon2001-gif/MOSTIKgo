@@ -21,6 +21,8 @@
   status = 200
 
 # Security & caching headers
+# app.js / app.css / sw.js have no hash in their names, so they must revalidate on every visit
+# (otherwise users keep the old version for a year after a deploy).
 [[headers]]
   for = "/*"
   [headers.values]
@@ -33,12 +35,12 @@
 [[headers]]
   for = "/app.js"
   [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
+    Cache-Control = "no-cache"
 
 [[headers]]
   for = "/app.css"
   [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
+    Cache-Control = "no-cache"
 
 [[headers]]
   for = "/assets/*"
@@ -49,3 +51,8 @@
   for = "/icons/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"

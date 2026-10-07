@@ -1,0 +1,13 @@
+MOSTIK v5.3.4 patch from M-main
+
+Fixed:
+- visible Add photo button in animal profile editor; file input remains hidden and is opened by the button
+- scheduled calendar recurrence: Every N days
+- schedule API validation and DB constraint for every_n_days
+- runtime schema repair for the schedule recurrence constraint
+- analytics specialist filter now includes schedule and reminders
+- analytics specialist filtering applies to schedule and reminders
+- analytics period label: 365 days
+- calendar recurrence labels/occurrence generation updated for daily/weekly/monthly/every_n_days
+
+Base: M-main(2)(1).zip / prior role-switch patch state.

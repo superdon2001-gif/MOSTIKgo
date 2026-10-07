@@ -1521,38 +1521,3 @@ input.field-invalid,select.field-invalid,textarea.field-invalid{
 .ui-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .mostik-toast{pointer-events:auto;cursor:pointer}
 .mostik-toast-warn{border-left:4px solid #d4a84b}
-
-/* v5.3.28 — навигация и приоритеты сигналов */
-.nav-more-menu{display:flex;flex-direction:column;gap:2px}
-.nav-more-menu[hidden]{display:none}
-.nav-more-btn{text-align:left}
-.header-logout{white-space:nowrap}
-.header-journal-btn.active,.animal-switcher.active select{outline:2px solid var(--accent);outline-offset:1px}
-.settings-account-card{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-.settings-account-card h3{margin:0 0 2px}.settings-account-card p{margin:0}
-
-/* главная: один уровень срочности, остальное приглушено */
-.hero-attention{margin-top:8px}
-.hero-attention span{border-left:3px solid #d4a84b}
-.health-banner.calm{background:var(--card);box-shadow:none;border-color:var(--line);padding:10px 14px}
-.health-banner.calm .health-note{display:none}
-.health-banner.calm .health-banner-head strong{font-size:14px;font-weight:600}
-
-/* выбор животного прямо в карточке режима «Все животные» */
-.today-tip-pick{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
-.today-tip-pick>div{display:grid;gap:4px;min-width:200px;flex:1}
-.inline-animal-pick{display:grid;gap:2px;min-width:200px}
-.inline-animal-pick select{width:100%}
-
-@media(min-width:801px){
-  aside .nav-more-btn{display:none}
-  aside .nav-more-menu[hidden]{display:flex}
-  aside .nav-more-menu{display:flex}
-}
-@media(max-width:800px){
-  aside{overflow:visible;justify-content:space-between}
-  aside>button,aside .nav-more-btn{flex:1 1 0;min-width:0;padding:9px 4px;font-size:12px;overflow:hidden;text-overflow:ellipsis}
-  .nav-more-menu{position:absolute;right:0;bottom:calc(100% + 8px);min-width:170px;background:var(--side-bg,#173027);box-shadow:0 12px 34px rgba(15,35,28,.32);padding:6px;z-index:101}
-  .nav-more-menu button{width:100%;text-align:left;min-height:44px;font-size:14px}
-  .header-logout{order:5}
-}

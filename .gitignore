@@ -1,0 +1,17 @@
+# Local Netlify folder (local DB, state, geolocation)
+.netlify/
+
+# Dependencies
+node_modules/
+
+# Local embedded database (PGlite) - real data, never commit
+data/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db

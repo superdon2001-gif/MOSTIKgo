@@ -1,0 +1,7 @@
+MOSTIK v5.2.10 — sharp modern UI
+
+- Removed soft border-radius across the interface (cards, buttons, inputs,
+  modals, chips, tabs, forms, status pills, etc.) for a cleaner modern look.
+- Kept circular shapes only where intentional: app logos, theme logo
+  previews, and animal avatars/photos.
+- SW cache: mostik-v5.2.10-cache.

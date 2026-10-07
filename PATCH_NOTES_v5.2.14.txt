@@ -1,0 +1,19 @@
+MOSTIK v5.2.14 — one role, one primary path
+
+Default screen after login:
+- owner  → Главная (Сегодня)
+- trainer → Тренировка
+- keeper → Рацион
+- vet    → Ветеринария
+- admin  → Животные
+
+Primary quick actions (3):
+- owner:  Записать еду · ДЗ · Календарь
+- trainer: Начать сессию · ДЗ · Навыки
+- keeper: Рацион · Наблюдение · Календарь
+- vet: Запись · Анализы · Препараты
+
+Nav order puts the role’s main section first.
+Home tip text is role-specific.
+
+SW: mostik-v5.2.14-cache

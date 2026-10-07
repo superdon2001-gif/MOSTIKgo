@@ -1,0 +1,10 @@
+MOSTIK v5.2.9 — quick access panels
+
+- Veterinary tab: sticky quick-access panel at the top with
+  Запись · Анализы · Графики выдачи препаратов · История
+  (smooth scroll to existing sections, no new features).
+- Sections reordered for clearer flow: record → analyses → med schedules → history.
+- Training tab: quick panel Сессия · Домашние задания.
+- Food tab: existing Записи / План питания tabs restyled as the same quick-nav pattern.
+- Shared helpers: quickNav() + bindQuickNav(); highlight flash on jump target.
+- SW cache: mostik-v5.2.9-cache.

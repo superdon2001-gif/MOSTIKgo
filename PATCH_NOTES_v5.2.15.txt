@@ -1,0 +1,14 @@
+MOSTIK v5.2.15 — plain-language labels & empty states
+
+Labels:
+- «Начать сессию ДЗ» → «Выполнить домашнее задание»
+- «Скопировать ID» → «Код животного»
+- Owner food field «Продукты» → «Что дали» (simple list; full format kept for keeper/admin)
+
+Empty states:
+- No animals: «Создайте карточку или введите код животного» + buttons
+  «Новое животное» / «Ввести код животного»
+- No homework: «Тренер пока не задал упражнений.»
+- No diet plan: hint under products + empty diet list message about «План питания»
+
+SW: mostik-v5.2.15-cache

@@ -1,0 +1,12 @@
+MOSTIK v5.2.13 — mobile UX / role fixes from field feedback
+
+1. Calendar «+ Запланировать» opens a modal (was below the fold on mobile).
+2. «Добавить животное» — modal moves to document.body; stronger click binding.
+3. Auth login/register tabs keep email, password, name, role when switching.
+4. Food log: products auto-filled from active diet plan (diets/active);
+   meal field change re-matches plan meal when possible.
+5. Owner homework: «Отметить выполненным» + «Начать сессию ДЗ»
+   (owner marks complete via homework/:id/complete).
+6. Vet role: «Рацион» removed from navigation (not needed for vet workflow).
+
+SW cache: mostik-v5.2.13-cache

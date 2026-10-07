@@ -33,7 +33,7 @@ export default async () => {
   const body = {
     ok: dbOk,
     app: 'MOSTIK',
-    version: '5.3.20',
+    version: '5.3.27',
     backend: 'netlify-functions',
     db: dbOk ? 'up' : 'down',
     db_mode: mode,

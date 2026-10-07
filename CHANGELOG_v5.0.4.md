@@ -1,5 +1,3 @@
-> Историческая запись: описанная здесь навигация («Ещё», «Питание») позже изменилась. Актуальное меню — в README.md.
-
 # MOSTIK v5.0.4
 
 - Fixed duplicate "Что делать сейчас" blocks caused by overlapping async home renders.

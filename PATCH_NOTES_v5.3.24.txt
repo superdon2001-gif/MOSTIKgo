@@ -1,0 +1,42 @@
+MOSTIK v5.3.24 — надёжный Logout (пункт 1 приоритета)
+=====================================================
+
+BUG
+---
+Кнопка «Выйти» часто не завершала сессию:
+  - fetch без credentials: 'include' (cookie не всегда уходил/сбрасывался);
+  - location.href + location.reload() создавали гонку;
+  - query ?logout=1 не обрабатывался в init();
+  - localStorage очищался частично (только mostik_active_animal);
+  - Set-Cookie при logout имел чуть другой Secure-флаг, чем при login.
+
+FIX
+---
+app.js:
+  1. api() всегда шлёт credentials: 'include'.
+  2. Новая doLogout():
+       - POST /api/auth/logout
+       - полная очистка localStorage (все ключи mostik_*)
+       - sessionStorage.clear()
+       - apiCache / apiPending clear
+       - state сброс
+       - location.replace('/?logout=1') — один жёсткий переход без гонки
+  3. init() при ?logout=1 сразу показывает экран входа и чистит URL (replaceState).
+  4. Оба обработчика (#logoutNavBtn и #logout) вызывают doLogout.
+
+api.mjs / netlify/functions/api.mjs:
+  1. clearCookie() — те же Path / SameSite / Secure, что и cookie().
+  2. auth/logout использует clearCookie().
+  3. health version → 5.3.24.
+
+HOW TO APPLY
+------------
+1. Скопировать файлы поверх проекта (см. README_INSTALL.txt).
+2. Deploy (git push или netlify deploy --prod).
+3. Проверка:
+   - войти demo.owner@mostik.local / demo123
+   - нажать «Выйти» → confirm → экран входа
+   - обновить страницу (F5) → всё ещё экран входа
+   - /api/health → version 5.3.24
+
+No DB migrations in this patch.

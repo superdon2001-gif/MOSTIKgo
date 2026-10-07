@@ -1,13 +1,19 @@
 {
-  "name": "mostik-local",
-  "version": "5.3.24-local",
+  "name": "mostik",
+  "version": "5.3.27",
   "private": true,
-  "description": "MOSTIK local (embedded DB, no Docker)",
+  "description": "MOSTIK: web app (Netlify Functions + Netlify Database; local mode with embedded PGlite)",
   "type": "module",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "build": "node scripts/build.mjs",
+    "db:migrate": "node scripts/apply-migrations.mjs"
   },
   "dependencies": {
+    "@netlify/database": "latest",
+    "postgres": "^3.4.0"
+  },
+  "optionalDependencies": {
     "@electric-sql/pglite": "0.5.8"
   },
   "engines": {

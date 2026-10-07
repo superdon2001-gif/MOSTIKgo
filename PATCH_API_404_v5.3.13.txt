@@ -1,0 +1,20 @@
+MOSTIK v5.3.13 — API 404 routing patch
+
+Причина:
+В netlify.toml был redirect /api/* -> /.netlify/functions/:splat. Для запросов /api/auth/login это превращало маршрут в /.netlify/functions/auth/login, хотя функция называется api, поэтому Netlify возвращал 404.
+
+Исправление:
+- удалён redirect /api/*;
+- API-маршрутизация оставлена через export const config={path:"/api/*"} в netlify/functions/api.mjs;
+- SPA fallback /* -> /index.html сохранён;
+- Node обновлён до 22.12.0, совместимого с установленными Netlify пакетами;
+- версии приложения обновлены до 5.3.13;
+- миграции 001–047 и 004_demo_seed.sql не изменялись.
+
+Ожидаемые маршруты:
+/api/auth/login
+/api/auth/register
+/api/auth/status
+/api/me
+/api/health
+и остальные маршруты api.mjs.

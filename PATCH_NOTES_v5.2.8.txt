@@ -1,0 +1,15 @@
+MOSTIK v5.2.8 — join animal by ID + classic/nest fix
+
+- Fixed theme «Гнездо» (nest): it was incorrectly forced to «Классика»
+  via legacy theme map. Nest is now independent again.
+- Add animal modal has two modes:
+  • Создать новое (admin/owner)
+  • По ID — подключение к существующему животному через animal_access
+- Roles trainer/keeper/vet/owner/admin can add animal by ID.
+- Non-owners opening the modal get join-by-ID mode by default
+  (create tab disabled).
+- «Вставить ID» reads clipboard into the ID field.
+- Animal cards: button «Скопировать ID».
+- Animal context bar: clickable ID copies to clipboard.
+- API animals/access INSERT fixed for schema without animal_access.id column.
+- SW cache: mostik-v5.2.8-cache.

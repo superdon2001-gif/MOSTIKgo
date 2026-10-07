@@ -1,0 +1,21 @@
+MOSTIK v5.2.16 — role simplification + feedback
+
+Nav by role (show/hide):
+- owner: home, animals, journal, vet, training, food, calendar
+- trainer: training, animals, journal, care-overview (read-only food+vet), analytics, calendar
+- keeper: food, enrichment, journal, training (no HW), vet (view), calendar, analytics
+- vet: vet, care-overview (food+enrichment+sessions read-only), calendar, analytics, animals
+
+Owner:
+- Home «Сегодня»: ДЗ / лекарства / ближайшее + быстрые кнопки
+- Food form simplified: Приём, Что съел (from plan), Аппетит, Комментарий; details under «Подробнее»
+- Vet: owner can leave a simple note
+- Training: only HW + history
+
+Trainer/Keeper/Vet training visibility adjusted; keeper/vet HW hidden.
+
+Feedback:
+- toast() for saves (food, schedule, HW complete, training)
+- friendlyError() for API messages
+
+SW: mostik-v5.2.16-cache

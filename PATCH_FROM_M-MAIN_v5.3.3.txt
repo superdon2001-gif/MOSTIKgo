@@ -1,0 +1,22 @@
+MOSTIK patch from clean M-main
+Version: v5.3.3 + role switcher/demo keeper patch
+
+Base: M-main(2)(1).zip
+
+Changed files:
+- public/app.js
+- public/app.css
+- netlify/functions/api.mjs
+- netlify/database/migrations/030_multi_roles.sql
+- netlify/database/migrations/031_animal_microchip.sql
+- netlify/database/migrations/032_recurring_calendar.sql
+- netlify/database/migrations/033_diet_assignments.sql
+- netlify/database/migrations/034_observation_ethogram.sql
+- netlify/database/migrations/035_reminder_schedule_end.sql
+- netlify/database/migrations/036_unified_score_activity.sql
+
+Role switcher:
+- admin sees role selector even with one real role
+- multi-role users see their assigned roles
+- active role stored in sessions_auth.active_role
+- demo keeper mode supported by admin
